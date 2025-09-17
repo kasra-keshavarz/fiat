@@ -1,0 +1,2 @@
+"""FIATModel main entry point"""
+
