@@ -207,7 +207,8 @@ marimo/_lsp/
 __marimo__/
 
 # Test stuff - temporary
-tests/
+# tests/ - I want the test Notebooks to be uploaded for now
+wolf-creek-research-basin/
 
 # Mac stuff
 .DS_Store
