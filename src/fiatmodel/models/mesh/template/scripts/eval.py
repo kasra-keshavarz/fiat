@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# Importing necessary libraries:
-
 # data manipulation libraries
 import pandas as pd
 import numpy as np
