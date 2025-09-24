@@ -1,0 +1,208 @@
+# random seed is set to the Unix EPOCH time when this
+# file is created
+
+# essential variables
+ProgramType       DDS
+ModelExecutable   ./etc/scripts/model_evaluation.py
+ModelSubdir       cpu_
+ObjectiveFunction gcop
+
+# useful optional variables
+PreserveModelOutput  ./etc/scripts/archive.sh
+OstrichWarmStart     yes
+NumDigitsOfPrecision 3
+TelescopingStrategy  none
+RandomSeed           1730235264
+OnObsError           1.00
+
+# experimental or less common optional variables
+CheckSensitivities    no
+SuperMUSE             no
+OstrichCaching        yes
+BoxCoxTransformation  1.00
+ModelOutputRedirectionFile  ostrich_output.txt
+
+# DDS specs
+BeginDDSAlg
+  PerturbationValue 0.2
+  MaxIterations      10000
+  UseRandomParamValues
+EndDDSAlg
+
+# response variable
+BeginResponseVars
+  #name        filename                                  keyword      line   col   token
+  KGE_2012     ./mesh/results/kge_2012.csv ;             OST_NULL     0      1     ','
+EndResponseVars
+
+# objective function specs
+BeginGCOP
+  CostFunction     KGE_2012
+  PenaltyFunction  APM
+EndGCOP
+
+# file pairs
+BeginFilePairs
+  ./etc/templates/MESH_parameters_CLASS.tpl      ; ./mesh/MESH_parameters_CLASS.ini
+  ./etc/templates/MESH_parameters_hydrology.tpl  ; ./mesh/MESH_parameters_hydrology.ini
+EndFilePairs
+
+# extra directories
+BeginExtraDirs
+  ./mesh/
+  ./etc/
+EndExtraDirs
+
+# parameters
+BeginParams
+
+  # GRU 1: Needle Leaf Forest (temperate)
+  #name       init.   lower     upper     txIn  txOst  txOut   format
+  _1SDEP      2.0     0.50      4.00      none  none   none    F6.3
+  _1CLY_      0.50    0.00      0.50      none  none   none    F6.3
+  _1SND_      0.75    0.30      0.90      none  none   none    F6.3
+  _1SLT_      0.50    0.00      0.50      none  none   none    F6.3
+  _1LAMX      2.530   1.00      6.00      none  none   none    F6.3
+  _1LAMN      1.565   1.128     2.700     none  none   none    F6.3
+  _1LNZ0      0.405   -10       0.99      none  none   none    F6.3
+  _1ROOT      1.131   0.2       4         none  none   none    F6.3
+  _1RSMN      204.610 50        300       none  none   none    F7.3
+  _1QA50      32.610  10        50        none  none   none    F6.3
+  _1VPDA      0.805   0.2       0.9       none  none   none    F6.3
+  _1KSAT      0.887   0.001     0.9       none  none   none    F6.3
+  _1ZSNL      random  0.03      0.6       none  none   none    F6.3
+  _1MANN      0.292   0.02      0.3       none  none   none    F6.3
+  _1ZPLS      random  0.02      0.15      none  none   none    F6.3
+  _1ZPLG      random  0.03      0.35      none  none   none    F6.3
+  
+  # GRU 6: Mixed Forest
+  #name        init.   lower     upper     txIn  txOst  txOut   format
+  _6SDEP       2.0     0.5       4.0       none  none   none    F6.3
+  _6CLY_       0.50    0.00      0.50      none  none   none    F6.3
+  _6SND_       0.75    0.30      0.90      none  none   none    F6.3
+  _6SLT_       0.50    0.00      0.50      none  none   none    F6.3
+  _6LAMX1      1.90    1         6         none  none   none    F6.3
+  _6LAMX2      1.90    1         6         none  none   none    F6.3
+  _6LAMX3      1.90    1         6         none  none   none    F6.3
+  _6LAMN1      0.595   1.128     2.700     none  none   none    F6.3
+  _6LAMN2      0.595   1.128     2.700     none  none   none    F6.3
+  _6LAMN3      0.595   1.128     2.700     none  none   none    F6.3
+  _6LNZ01      -4.504  -10       0.99      none  none   none    F6.3
+  _6LNZ02      -4.504  -10       0.99      none  none   none    F6.3
+  _6LNZ03      -4.504  -10       0.99      none  none   none    F6.3
+  _6ROOT1      1.830   0.2       4         none  none   none    F6.3
+  _6ROOT2      1.830   0.2       4         none  none   none    F6.3
+  _6ROOT3      1.830   0.2       4         none  none   none    F6.3
+  _6RSMN1      121.66  50        300       none  none   none    F7.3
+  _6RSMN2      121.66  50        300       none  none   none    F7.3
+  _6RSMN3      121.66  50        300       none  none   none    F7.3
+  _6QA501      39.166  10        50        none  none   none    F6.3
+  _6QA502      39.166  10        50        none  none   none    F6.3
+  _6QA503      39.166  10        50        none  none   none    F6.3
+  _6VPDA1      0.3     0.2       0.8       none  none   none    F6.3
+  _6VPDA2      0.3     0.2       0.8       none  none   none    F6.3
+  _6VPDA3      0.3     0.2       0.8       none  none   none    F6.3
+  _6KSAT       0.074   0.001     0.1       none  none   none    F6.3
+  _6ZSNL       random  0.03      0.6       none  none   none    F6.3
+  _6MANN       0.268   0.02      0.3       none  none   none    F6.3
+  _6ZPLS       random  0.02      0.15      none  none   none    F6.3
+  _6ZPLG       random  0.03      0.35      none  none   none    F6.3
+  
+  # GRU 8: Temperate shrubland (subpolar)
+  #name       init.   lower     upper     txIn  txOst  txOut   format
+  _8SDEP      2.0     0.5       4.0       none  none   none    F6.3
+  _8CLY_      0.15    0.00      0.50      none  none   none    F6.3
+  _8SND_      0.50    0.30      0.90      none  none   none    F6.3
+  _8SLT_      0.10    0.00      0.50      none  none   none    F6.3
+  _8LAMX      2.0     1         6         none  none   none    F6.3
+  _8LAMN      1.3     1.128     2.700     none  none   none    F6.3
+  _8LNZ0      -2.0    -10       0.99      none  none   none    F6.3
+  _8ROOT      1.2     0.2       4         none  none   none    F6.3
+  _8RSMN      100     50        300       none  none   none    F7.3
+  _8QA50      49      10        50        none  none   none    F6.3
+  _8VPDA      0.5     0.2       0.8       none  none   none    F6.3
+  _8KSAT      0.01    0.001     0.1       none  none   none    F6.3
+  _8ZSNL      random  0.03      0.6       none  none   none    F6.3
+  _8MANN      0.28    0.02      0.3       none  none   none    F6.3
+  _8ZPLS      random  0.02      0.15      none  none   none    F6.3
+  _8ZPLG      random  0.03      0.35      none  none   none    F6.3
+  
+  # GRU 10: Temperate grassland (subpolar)
+  #name        init.   lower     upper     txIn  txOst  txOut   format
+  _10SDEP      2.0     0.5       4.0       none  none   none    F6.3
+  _10CLY_      0.35    0.00      0.50      none  none   none    F6.3
+  _10SND_      0.70    0.30      0.90      none  none   none    F6.3
+  _10SLT_      0.10    0.00      0.50      none  none   none    F6.3
+  _10LAMX      2.53    1         6         none  none   none    F6.3
+  _10LAMN      1.56    1.128     2.700     none  none   none    F6.3
+  _10LNZ0      0.405   -10       0.99      none  none   none    F6.3
+  _10ROOT      1.31    0.2       4         none  none   none    F6.3
+  _10RSMN      204.610 50        300       none  none   none    F7.3
+  _10QA50      32.691  10        50        none  none   none    F6.3
+  _10VPDA      0.705   0.2       0.9       none  none   none    F6.3
+  _10KSAT      0.020   0.001     0.1       none  none   none    F6.3
+  _10ZSNL      random  0.03      0.6       none  none   none    F6.3
+  _10MANN      0.292   0.02      0.3       none  none   none    F6.3
+  _10ZPLS      random  0.02      0.15      none  none   none    F6.3
+  _10ZPLG      random  0.03      0.35      none  none   none    F6.3
+  
+  # GRU 16: Barrenland
+  #name        init.   lower     upper     txIn  txOst  txOut   format
+  _16SDEP      2.0     0.5       4.0       none  none   none    F6.3
+  _16CLY_      0.30    0.00      0.50      none  none   none    F6.3
+  _16SND_      0.60    0.30      0.90      none  none   none    F6.3
+  _16SLT_      0.10    0.00      0.50      none  none   none    F6.3
+  _16LNZ0      -6.35   -10       0.99      none  none   none    F6.3
+  _16KSAT      0.02    0.001     0.1       none  none   none    F6.3
+  _16ZSNL      random  0.03      0.6       none  none   none    F6.3
+  _16MANN      0.288   0.02      0.3       none  none   none    F6.3
+  _16ZPLS      random  0.02      0.15      none  none   none    F6.3
+  _16ZPLG      random  0.03      0.35      none  none   none    F6.3
+  
+  # GRU independent parameters
+  _R2N         1.0     0.001     2.0       none  none   none    F10.8
+  _R1N         1.0     0.001     2.0       none  none   none    F10.8
+  _PWR         2.5     2.0       3.0       none  none   none    F10.8
+  _FLZ       0.000056  0.000001  0.0001    none  none   none    F10.8
+EndParams
+
+# Constraints for soil type percentages
+BeginTiedParams
+  # for _XSOIL parameter(s)
+  # for _XSAND & _XCLAY parameter(s)
+
+  # block X=1
+  # <name1>     <np1> <pname1,1> <pname1,2> <pname1,3> <type1> <dtype1> <dtype2> <dtype3> <format>
+    _1SUM_SOIL_ 3     _1SND_     _1CLY_     _1SLT_     wsum    1        1        1        F7.3 
+  # <name1> <np1> <pname1,1> <pname1,2>                <type1> <c3> <c2> <c1> <c0> <format>
+    _1SAND  2     _1SND_     _1SUM_SOIL_               ratio   100  0    1    0    F7.3
+    _1CLAY  2     _1CLY_     _1SUM_SOIL_               ratio   100  0    1    0    F7.3
+
+  # block X=6
+  # <name1>     <np1> <pname1,1> <pname1,2> <pname1,3> <type1> <dtype1> <dtype2> <dtype3> <format>
+    _6SUM_SOIL_ 3     _6SND_     _6CLY_     _6SLT_     wsum    1        1        1        F7.3 
+  # <name1> <np1> <pname1,1> <pname1,2>                <type1> <c3> <c2> <c1> <c0> <format>
+    _6SAND  2     _6SND_     _6SUM_SOIL_               ratio   100  0    1    0    F7.3
+    _6CLAY  2     _6CLY_     _6SUM_SOIL_               ratio   100  0    1    0    F7.3
+
+  # block X=8
+  # <name1>     <np1> <pname1,1> <pname1,2> <pname1,3> <type1> <dtype1> <dtype2> <dtype3> <format>
+    _8SUM_SOIL_ 3     _8SND_     _8CLY_     _8SLT_     wsum    1        1        1        F7.3 
+  # <name1> <np1> <pname1,1> <pname1,2>                <type1> <c3> <c2> <c1> <c0> <format>
+    _8SAND  2     _8SND_     _8SUM_SOIL_               ratio   100  0    1    0    F7.3
+    _8CLAY  2     _8CLY_     _8SUM_SOIL_               ratio   100  0    1    0    F7.3
+
+  # block X=10
+  # <name1>      <np1> <pname1,1> <pname1,2> <pname1,3> <type1> <dtype1> <dtype2> <dtype3> <format>
+    _10SUM_SOIL_ 3     _10SND_    _10CLY_    _10SLT_    wsum    1        1        1        F7.3 
+  # <name1> <np1> <pname1,1> <pname1,2>                 <type1> <c3> <c2> <c1> <c0> <format>
+    _10SAND  2    _10SND_    _10SUM_SOIL_               ratio   100  0    1    0    F7.3
+    _10CLAY  2    _10CLY_    _10SUM_SOIL_               ratio   100  0    1    0    F7.3
+
+  # block X=16
+  # <name1>      <np1> <pname1,1> <pname1,2> <pname1,3> <type1> <dtype1> <dtype2> <dtype3> <format>
+    _16SUM_SOIL_ 3     _16SND_    _16CLY_    _16SLT_    wsum    1        1        1        F7.3 
+  # <name1> <np1> <pname1,1> <pname1,2>                 <type1> <c3> <c2> <c1> <c0> <format>
+    _16SAND 2     _16SND_    _16SUM_SOIL_               ratio   100  0    1    0    F7.3
+    _16CLAY 2     _16CLY_    _16SUM_SOIL_               ratio   100  0    1    0    F7.3
+EndTiedParams
