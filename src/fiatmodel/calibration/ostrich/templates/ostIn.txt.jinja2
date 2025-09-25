@@ -1,8 +1,17 @@
-# random seed is set to the Unix EPOCH time when this
-# file is created
-
-# essential variables
-ProgramType       DDS
+{# Defining variable used throughout the template file #}
+{% set algorithm = info.get('algorithm') %}
+{% set metric = info.get('metric') %}
+{% set random_seed = info.get('random_seed') %}
+{% set current_time = info.get('current_time') %}
+{% set parameters = info.get('parameters') %}
+{% set calibrating_parameters = info.get('calibrating_parameters') %}
+{% if 'constraints' in parameters %}
+  {%   set constraints = parameters.get('constraints') %}
+{% else %}
+  {%   set constraints = None %}
+{% endif %}
+# Eessential variables
+ProgramType       {{ algorithm}}
 ModelExecutable   ./etc/scripts/eval.py
 ModelSubdir       cpu_
 ObjectiveFunction gcop
@@ -12,7 +21,7 @@ PreserveModelOutput  ./etc/scripts/archive.sh
 OstrichWarmStart     yes
 NumDigitsOfPrecision 3
 TelescopingStrategy  none
-RandomSeed           {{ seed}}
+RandomSeed           {{ random_seed }}
 OnObsError           1.00
 
 # experimental or less common optional variables
@@ -31,22 +40,25 @@ EndDDSAlg
 
 # response variable
 BeginResponseVars
-  #name        filename                                  keyword      line   col   token
-  KGE_2012     ./mesh/results/{{ metric }}.csv ;             OST_NULL     0      1     ','
+  #name        filename ;                                 keyword      line   col   token
+  {{ metric }}     ./etc/evaluation/{{ metric }}.csv ;             OST_NULL     0      1     ','
 EndResponseVars
 
 # objective function specs
 BeginGCOP
-  CostFunction     {{ metric}}
+  CostFunction     {{ metric }}
   PenaltyFunction  APM
 EndGCOP
 
+{% if info.get('parameters') is iterable and info.get('parameters') %}
 # file pairs
 BeginFilePairs
-{% for file in template_files %}
-  ./etc/templates/{{ file }} ; ./etc/evaluation/{{ file }}
-{% endfor %}
+  # template file;                     output file
+  {% for file in info.get('parameters') %}
+  ./etc/templates/{{ file }}.json; ./etc/evaluation/{{ file }}.json
+  {% endfor %}
 EndFilePairs
+{% endif %}
 
 # extra directories
 BeginExtraDirs
@@ -54,16 +66,22 @@ BeginExtraDirs
   ./etc/
 EndExtraDirs
 
+{% if info.get('parameters') and calibrating_parameters is defined and calibrating_parameters is mapping %}
 # parameters
 BeginParams
-
-  # computational unit #{{1 }}: {{ unit_name}}
-  #name       init.   lower     upper     txIn  txOst  txOut   format
-
-  # global parameters
-  #name       init.   lower     upper     txIn  txOst  txOut   format
-
+  # name      initial   min       max       type     format
+  {% for param_group, param_dict in calibrating_parameters.items() %}
+    {% if param_dict %}
+      {% for unit, params in param_dict.items() %}
+    # Computational unit #{{ unit }} parameter
+        {% for _, param in params.items() %}
+    {{ param }}
+        {% endfor %}
+      {% endfor %}
+    {% endif %}
+  {% endfor %}
 EndParams
+{% endif %}
 
 # Constraints
 BeginTiedParams
