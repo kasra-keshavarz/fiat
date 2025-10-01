@@ -1,22 +1,34 @@
+{#
+   ============================
+   OSTRICH Configuration File
+   ============================
+#}
 {# Defining variable used throughout the template file #}
 {% set algorithm = info.get('algorithm') %}
+{# Based on algorithm, we may need algorithm-specific parameters #}
+{% set algorithm_specs = info.get('algorithm_specs') %}
+{# And, if `algorithm_specs` exists, we need a name equivalent for
+   the Begin<name>Alg and End<name>Alg blocks #}
+{% set algorithm_name = default_dicts._algorithm_names.get(algorithm | lower) %}
+{# Other relevant variables can be defined as following #}
 {% set metric = info.get('metric') %}
 {% set random_seed = info.get('random_seed') %}
 {% set current_time = info.get('current_time') %}
 {% set parameters = info.get('parameters') %}
-{% set calibrating_parameters = info.get('calibrating_parameters') %}
-{% if 'constraints' in parameters %}
-  {%   set constraints = parameters.get('constraints') %}
-{% else %}
-  {%   set constraints = None %}
-{% endif %}
+{% set calibration_bounds = info.get('calibration_bounds') %}
+{% set constraints = parameters.get('constraints') %}
+{#
+   ==================
+   Main OSTRICH Block
+   ==================
+#}
 # Eessential variables
-ProgramType       {{ algorithm}}
+ProgramType       {{ algorithm }}
 ModelExecutable   ./etc/scripts/eval.py
 ModelSubdir       cpu_
 ObjectiveFunction gcop
 
-# useful optional variables
+# Useful optional variables
 PreserveModelOutput  ./etc/scripts/archive.sh
 OstrichWarmStart     yes
 NumDigitsOfPrecision 3
@@ -24,58 +36,67 @@ TelescopingStrategy  none
 RandomSeed           {{ random_seed }}
 OnObsError           1.00
 
-# experimental or less common optional variables
+# Experimental or less common optional variables
 CheckSensitivities    no
 SuperMUSE             no
 OstrichCaching        yes
 BoxCoxTransformation  1.00
 ModelOutputRedirectionFile  OstOutput.txt
 
-# DDS specs
-BeginDDSAlg
-  PerturbationValue 0.2
-  MaxIterations      10000
-  UseRandomParamValues
-EndDDSAlg
+{% if algorithm_specs is defined and algorithm_specs is mapping %}
+# Algorithm specs
+Begin{{ algorithm_name }}
+  {% for key, value in algorithm_specs.items() %}
+  {% if value is not none %}
+  {{ key }}  {{ value }}
+  {% else %}
+  {{ key }}
+  {% endif %}
+  {% endfor %}
+End{{ algorithm_name }}
+{% endif %}
 
-# response variable
+# Response variable
 BeginResponseVars
   #name        filename ;                                 keyword      line   col   token
   {{ metric }}     ./etc/evaluation/{{ metric }}.csv ;             OST_NULL     0      1     ','
 EndResponseVars
 
-# objective function specs
+# Objective function specs
 BeginGCOP
   CostFunction     {{ metric }}
   PenaltyFunction  APM
 EndGCOP
 
-{% if info.get('parameters') is iterable and info.get('parameters') %}
-# file pairs
+{% if parameters is iterable and parameters %}
+# File pairs
 BeginFilePairs
-  # template file;                     output file
-  {% for file in info.get('parameters') %}
+  # template file; output file
+  {% for file in parameters %}
   ./etc/templates/{{ file }}.json; ./etc/evaluation/{{ file }}.json
   {% endfor %}
 EndFilePairs
 {% endif %}
 
-# extra directories
+# Extra directories
 BeginExtraDirs
   ./model/
   ./etc/
 EndExtraDirs
 
-{% if info.get('parameters') and calibrating_parameters is defined and calibrating_parameters is mapping %}
-# parameters
+{% if parameters and calibration_bounds is defined and calibration_bounds is mapping %}
+# Parameters, bounds, and types
 BeginParams
-  # name      initial   min       max       type     format
-  {% for param_group, param_dict in calibrating_parameters.items() %}
+    # name   initial    min    max    type    format
+  {% for param_group, param_dict in calibration_bounds.items() %}
     {% if param_dict %}
       {% for unit, params in param_dict.items() %}
-    # Computational unit #{{ unit }} parameter
-        {% for _, param in params.items() %}
-    {{ param }}
+    # Computational unit #{{ unit }} parameters
+        {% for name, bounds in params.items() %}
+        {# Extract templated calibrating parameter name #}
+        {% set param_name = parameters.get(param_group).get(unit).get(name) %}
+        {# so far, we were able to get the parameter name #}
+    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none F7.3
         {% endfor %}
       {% endfor %}
     {% endif %}
@@ -83,14 +104,17 @@ BeginParams
 EndParams
 {% endif %}
 
+{% if constraints is defined and constraints is mapping %}
 # Constraints
 BeginTiedParams
 
   # block X=1
   # name1       np1   pname1,1   pname1,2   pname1,3   type1   dtype1   dtype2   dtype3   format
+  {# Example: #}
   {#_1SUM_SOIL_ 3     _1SND_     _1CLY_     _1SLT_     wsum    1        1        1        F7.3 #}
   # name1   np1   pname1,1   pname1,2                  type1   c3   c2   c1   c0   format
  {# _1SAND  2     _1SND_     _1SUM_SOIL_               ratio   100  0    1    0    F7.3
     _1CLAY  2     _1CLY_     _1SUM_SOIL_               ratio   100  0    1    0    F7.3 #}
 
 EndTiedParams
+{% endif %}
