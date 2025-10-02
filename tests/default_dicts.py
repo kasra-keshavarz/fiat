@@ -31,5 +31,4 @@ _algorithm_names = {
     'padds': 'PADDSAlg',
     'parapadds': 'ParallelPADDSAlg',
     'smooth': 'SMOOTH',
-    '': '',
 }
