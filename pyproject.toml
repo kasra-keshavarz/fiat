@@ -1,58 +1,61 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "fiatmodel"
-version = "0.1.0"
-description = "Framework for Iterative and Agnostic Testing of Hydrological Models"
+dynamic = ["version"]
+description = 'Framework for Iterative Assessment and Testing of Computer Models'
 readme = "README.md"
-license = {file = "LICENSE"}
+requires-python = ">=3.8"
+license = "GPL-3.0-or-later"
+keywords = []
 authors = [
-    {name = "Kasra Keshavarz", email = "kasra.keshavarz1@ucalgary.ca"}
+  { name = "Kasra Farmer", email = "kasra.keshavarz1@ucalgary.ca" },
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: Scientific/Engineering :: Hydrology",
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
 ]
-requires-python = ">=3.10"
-dependencies = [
-    "jinja2",
-    "python-dateutil>=2.9.0",
-    "packaging>=25.0",
-]
-
-[project.optional-dependencies]
-dev = [
-    "ipykernel>=6.30.0",
-    "ipython>=8.37.0",
-    "jupyter-client>=8.6.0",
-    "jupyter-core>=5.8.0",
-    "matplotlib-inline>=0.1.7",
-    "pygments>=2.19.0",
-    "prompt-toolkit>=3.0.50",
-]
-test = [
-    "pytest",
-    "pytest-cov",
-]
+dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/kasra-keshavarz/FIATModel"
-Repository = "https://github.com/kasra-keshavarz/FIATModel"
-Issues = "https://github.com/kasra-keshavarz/FIATModel/issues"
+Documentation = "https://github.com/kasra-keshavarz/fiatmodel#readme"
+Issues = "https://github.com/kasra-keshavarz/fiatmodel/issues"
+Source = "https://github.com/kasra-keshavarz/fiatmodel"
 
-[project.scripts]
-fiatmodel = "fiatmodel.main:main"
+[tool.hatch.version]
+path = "src/fiatmodel/__about__.py"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.hatch.envs.types]
+extra-dependencies = [
+  "mypy>=1.0.0",
+]
+[tool.hatch.envs.types.scripts]
+check = "mypy --install-types --non-interactive {args:src/fiatmodel tests}"
 
-[tool.setuptools.package-dir]
-"" = "src"
+[tool.coverage.run]
+source_pkgs = ["fiatmodel", "tests"]
+branch = true
+parallel = true
+omit = [
+  "src/fiatmodel/__about__.py",
+]
+
+[tool.coverage.paths]
+fiat = ["src/fiatmodel", "*/fiatmodel/src/fiatmodel"]
+tests = ["tests", "*/fiatmodel/tests"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
