@@ -1,4 +1,20 @@
 {#
+    Useful macros
+    =============
+#}
+{% macro calculate_padding(column, cursor) %}
+    {# move cursor to column number in the text file #}
+    {{- " " * (column - cursor - 1) -}}
+{% endmacro %}
+{% macro format_float(value, decimals) %}
+    {# define number of decimals for float values #}
+    {{- "%.decimalsf" | replace('decimals', decimals) | format(value) -}}
+{% endmacro %}
+{% macro calculate_padding_end(column, val, cursor) %}
+    {# define the padding given the column the `val' s length #}
+    {{- " " * (column - (val | string | length) - cursor - 1) -}}
+{% endmacro %}
+{#
    ============================
    OSTRICH Configuration File
    ============================
@@ -16,31 +32,44 @@
 {% set current_time = info.get('current_time') %}
 {% set parameters = info.get('parameters') %}
 {% set calibration_bounds = info.get('calibration_bounds') %}
-{% set constraints = parameters.get('constraints') %}
+{% set constraints = info.get('constraints') %}
 {#
    ==================
    Main OSTRICH Block
    ==================
+
+   Potentially, an OSTRICH setup can have the following sections. For
+   full documentation, refer to OSTRICH's own manual.
+     1. Essential OSTRICH variables,
+     2. Optional OSTRICH variables,
+     3. Less-common optional OSTRICH variables,
+     4. Algorithm-specific parameters,
+     5. Response variable(s),
+     6. Objective function specifications,
+     7. OSTRICH template file pairs,
+     8. Extra directories to be included in individual OSTRICH runs,
+     9. Parameter bounds and types, and
+     10. Optional constraints.
 #}
-# Eessential variables
-ProgramType       {{ algorithm }}
-ModelExecutable   ./etc/scripts/eval.py
-ModelSubdir       cpu_
-ObjectiveFunction gcop
+# Essential variables
+ProgramType         {{ algorithm }}
+ModelExecutable     ./etc/scripts/eval.py
+ModelSubdir         cpu_
+ObjectiveFunction   gcop
 
 # Useful optional variables
-PreserveModelOutput  ./etc/scripts/archive.sh
-OstrichWarmStart     yes
-NumDigitsOfPrecision 3
-TelescopingStrategy  none
-RandomSeed           {{ random_seed }}
-OnObsError           1.00
+PreserveModelOutput    ./etc/scripts/archive.sh
+OstrichWarmStart       yes
+NumDigitsOfPrecision   3
+TelescopingStrategy    none
+RandomSeed             {{ random_seed }}
+OnObsError             1.00
 
 # Experimental or less common optional variables
-CheckSensitivities    no
-SuperMUSE             no
-OstrichCaching        yes
-BoxCoxTransformation  1.00
+CheckSensitivities          no
+SuperMUSE                   no
+OstrichCaching              yes
+BoxCoxTransformation        1.00
 ModelOutputRedirectionFile  OstOutput.txt
 
 {% if algorithm_specs is defined and algorithm_specs is mapping %}
@@ -56,9 +85,9 @@ Begin{{ algorithm_name }}
 End{{ algorithm_name }}
 {% endif %}
 
-# Response variable
+# Response variables
 BeginResponseVars
-  #name        filename ;                                 keyword      line   col   token
+  # name        filename ;                                 keyword      line   col   token
   {{ metric }}     ./etc/evaluation/{{ metric }}.csv ;             OST_NULL     0      1     ','
 EndResponseVars
 
@@ -85,19 +114,61 @@ BeginExtraDirs
 EndExtraDirs
 
 {% if parameters and calibration_bounds is defined and calibration_bounds is mapping %}
+  {# Keeping track of whether a silt parameter has been included for each 
+     soil layer and computational unit #}
+  {% set silt = namespace(included = []) %}
 # Parameters, bounds, and types
 BeginParams
     # name   initial    min    max    type    format
+
   {% for param_group, param_dict in calibration_bounds.items() %}
-    {% if param_dict %}
+    {# e.g., 'mesh_soil', 'vic_soil', etc. #}
+    {# Checking whether `param_dict` is mapping and not empty #}
+    {% if param_dict and param_dict is mapping and parameters.get(param_group) is mapping%}
+    # Defining calibration parameters for `{{ param_group }}` group of parameters
       {% for unit, params in param_dict.items() %}
     # Computational unit #{{ unit }} parameters
         {% for name, bounds in params.items() %}
-        {# Extract templated calibrating parameter name #}
-        {% set param_name = parameters.get(param_group).get(unit).get(name) %}
-        {# so far, we were able to get the parameter name #}
+          {# Extract templated calibrating parameter name #}
+          {% set param_name = parameters.get(param_group).get(unit).get(name) %}
+          {# Check whether 'CLAY' or 'SAND' are included `param_name` #}
+          {# If so, we need to replace them with 'SLT' because of OSTRICH's
+            limitations in dealing with constraints #}
+          {% if 'CLAY' in param_name %}
+            {% set param_name = param_name | replace('CLAY', 'CLY') %}
+            {% set silt_name = param_name | replace('CLY', 'SLT') %}
+              {% if silt_name not in silt.included %}
+                {# Adding a silt parameter with fixed value of 0.0, min of 0.0, and max of 50.0 #}
+                {% set _ = silt.included.append(silt_name) %}
+    {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
+              {% endif %}
+          {% elif 'SAND' in param_name %}
+            {% set param_name = param_name | replace('SAND', 'SND') %}
+            {% set silt_name = param_name | replace('SND', 'SLT') %}
+            {% if silt_name not in silt.included %}
+              {% set _ = silt.included.append(silt_name) %}
+              {# Adding a silt parameter with fixed value of 0.0, min of 0.0, and max of 50.0 #}
+    {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
+            {% endif %}
+          {% endif %}
+          {# so far, we were able to get the parameter name #}
     {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none F7.3
         {% endfor %}
+
+      {% endfor %}
+    {% elif param_dict and param_dict is mapping and parameters.get(param_group) is iterable %}
+    # Defining calibration parameters for `{{ param_group }}` group of parameters
+      {# If `param_dict` is iterable, then we assume that it is a list of
+         parameter sets to be calibrated, and parameters are ordered based
+         on the computational unit of each parameter set #}
+      {% for unit, param_set in param_dict.items() %}
+    # Computational unit #{{ unit }} parameters
+        {% for name, bounds in param_set.items() %}
+          {# Extract templated calibrating parameter name #}
+          {% set param_name = parameters.get(param_group)[unit - 1].get(name) %}
+    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none F7.3
+        {% endfor %}
+
       {% endfor %}
     {% endif %}
   {% endfor %}
@@ -105,16 +176,101 @@ EndParams
 {% endif %}
 
 {% if constraints is defined and constraints is mapping %}
-# Constraints
+# Calibration constraints
 BeginTiedParams
+{#
+  FIXME: Implement a systematic constraints definition mechanism
+    For now, only focusing on soil parameters for MESH layers; a systematic
+    constraints definition mechanism is needed to define any constraint for
+    any calibration process.
 
-  # block X=1
-  # name1       np1   pname1,1   pname1,2   pname1,3   type1   dtype1   dtype2   dtype3   format
-  {# Example: #}
-  {#_1SUM_SOIL_ 3     _1SND_     _1CLY_     _1SLT_     wsum    1        1        1        F7.3 #}
-  # name1   np1   pname1,1   pname1,2                  type1   c3   c2   c1   c0   format
- {# _1SAND  2     _1SND_     _1SUM_SOIL_               ratio   100  0    1    0    F7.3
-    _1CLAY  2     _1CLY_     _1SUM_SOIL_               ratio   100  0    1    0    F7.3 #}
+  The variables that can be included in the constraint definition are:
+    - `clay1`, `clay2`, `clay3`: fraction of clay in layer 1, 2, and 3
+    - `sand1`, `sand2`, `sand3`: fraction of sand in layer 1, 2, and 3
 
+  Note:
+    - Silt values cannot be explicitely defined, as they are calculated as
+      `silt = 1 - clay - sand`.
+    - The sum of clay, sand, and silt in each layer must be equal to 100.
+    - The constraints are defined for each layer separately, and cannot
+      include parameters from different layers.
+#}
+  {% for constraint_group, constraint_dict in constraints.items() %}
+    {# Defining constraint parameters explicitely for MESH soil layers #}
+    {% set constraint_params = ['clay1', 'clay2', 'clay3', 'sand1', 'sand2', 'sand3'] %}
+    {# Before iterating over the soil layers, it is important to keep
+       track of layer numbers #}
+    {% set iterated_layers = [] %}
+    {# Defining constraints for each computational unit #}
+    {% if constraint_dict is mapping %}
+      {% for unit, param_list in constraint_dict.items() %}
+        {% set iterated_layers = [] %}
+        {% if param_list is iterable and param_list %}
+          {% for param in param_list %}
+            {% if param in constraint_params %}
+              {# Extract soil layer number for which the parameter is defined #}
+              {% set layer_num = param[4:] | int %}
+              {# Also adding the layer number to the list of iterated layers #}
+              {% if layer_num not in iterated_layers %}
+                {% set _ = iterated_layers.append(layer_num) %}
+    # Computational unit #{{ unit }} constraints
+    # Soil layer #{{ layer_num }}
+                {# Now, having a list of parameters for which we will defined constraints #}
+                {% set layer_params = {
+                  'clay' ~ layer_num: parameters.get(constraint_group).get(unit).get('clay' ~ layer_num),
+                  'sand' ~ layer_num: parameters.get(constraint_group).get(unit).get('sand' ~ layer_num),
+                  'silt' ~ layer_num: '_' ~ unit ~ 'SILT' ~ layer_num,
+                  }
+                %}
+                {# Also, make proxy parameters because of OSTRICH's limitations
+                  in dealing with constraints#}
+                {% set proxy_params = {
+                  'clay' ~ layer_num: '_' ~ unit ~ 'CLY' ~ layer_num ~ '_',
+                  'sand' ~ layer_num: '_' ~ unit ~ 'SND' ~ layer_num ~ '_',
+                  'silt' ~ layer_num: '_' ~ unit ~ 'SLT' ~ layer_num ~ '_',
+                }
+                %}
+                {# Count which values are actually strings #}
+                {% set string_keys = layer_params.items()
+                          | selectattr(1, 'string')
+                          | map(attribute=0)
+                          | list
+                %}
+                {# Define necessary local OSTRICH parameters #}
+                {% set sum_soil = '_' ~ unit ~ 'SUM_SOIL' ~ layer_num ~ '_' %}
+                {# If, all soil parameters need to be defined in constraints #}
+                {% if string_keys | length == 3 %}
+    # name          np   pname1      pname2      pname3      type    dtype1   dtype2   dtype3   format
+    {{ sum_soil }}    3    {{ proxy_params.get(string_keys[0]) }}     {{ proxy_params.get(string_keys[1]) }}     {{ proxy_params.get(string_keys[2]) }}     wsum    1        1        1        F7.3
+    # name     np   pname1      pname2           type1    c3   c2   c1   c0    format
+    {{ layer_params.get(string_keys[0]) }}    2    {{ proxy_params.get(string_keys[0]) }}     {{ sum_soil }}     ratio    100  1    1    0     F7.3
+    {{ layer_params.get(string_keys[1]) }}    2    {{ proxy_params.get(string_keys[1]) }}     {{ sum_soil }}     ratio    100  1    1    0     F7.3
+                {# Now, defining the ratio constraints #}
+                {% endif %}
+                {# If only two parameters are defined, we need to create the third one #}
+                {% if string_keys | length == 2 %}
+                  {# Now that we know the parameter that is left out, we need to identify it #}
+    # name          np   pname1      pname2      type1   dtype1   dtype2   format
+    {{ sum_soil }}    2    {{ proxy_params.get(string_keys[0]) }}     {{ proxy_params.get(string_keys[1]) }}     wsum    1        1        F7.3
+                  {# c0 would be the left out parameter value that is not entered
+                    in the calibration process #}
+                  {% set ns = namespace(left_out_param='') %}
+                  {% for item in (layer_params.keys() | list) %}
+                    {% if item not in string_keys %}
+                      {% set ns.left_out_param = item %}
+                    {% endif %}
+                  {% endfor %}
+                  {% set c0 = layer_params.get(ns.left_out_param) %}
+    # name     np   pname1      pname2           type1    c3   c2   c1   c0         format
+    {{ layer_params.get(string_keys[0]) }}    2    {{ proxy_params.get(string_keys[0]) }}     {{ sum_soil }}     ratio    100  1    1    {{ "%.3f" | format(c0) }}     F7.3
+                {% endif %}
+              {% endif %}
+            {% endif %}
+
+          {% endfor -%}
+        {%- endif -%}
+      {%- endfor -%}
+    {%- endif -%}
+  {%- endfor -%}
 EndTiedParams
-{% endif %}
+{%- endif -%}
