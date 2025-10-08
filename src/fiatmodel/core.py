@@ -66,8 +66,8 @@ class Calibration(object):
             raise TypeError('`model_config` must be a dictionary')
 
         # assign object attributes
-        self.calibration_software = calibration_software
-        self.model_software = model_software
+        self.calibration_software = calibration_software.lower()
+        self.model_software = model_software.lower()
         self.calibration_config = calibration_config
         self.model_config = model_config
 
@@ -88,17 +88,19 @@ class Calibration(object):
 
     def __str__(self):
         return 'Calibration()'
-    
+
+    @property
+    def observations(self):
+        """Load and process observational data based on
+        `self.model_config` dictionary."""
+        return
+
     def build(self, save_path: PathLike = None):
         """Build the calibration workflow."""
         return
 
-    def evaluate(self):
+    def evaluate_model(self):
         """Evaluate the model performance."""
-        return
-    
-    def observations(self):
-        """Load and process observational data."""
         return
 
     def to_dict(self) -> dict:
@@ -108,4 +110,3 @@ class Calibration(object):
     def to_json(self) -> str:
         """Serialize the object to a JSON string."""
         return json.dumps(self.__dict__)
-
