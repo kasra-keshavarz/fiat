@@ -9,16 +9,20 @@ import sys
 from typing import (
     Dict,
     Union,
+    List,
 )
 from pathlib import Path
 from io import StringIO
 
 # custom types
+# PathLike type alias for file system paths
 if sys.version_info >= (3, 10):
     from typing import TypeAlias
     PathLike: TypeAlias = Union[str, Path]
 else:
     PathLike = Union[str, Path]
+# NameType type alias for parameter names
+NameType = Union[str, int, float]
 
 # MESH-specific templating engine
 from .funcs import *
@@ -40,10 +44,15 @@ class MESH(Builder):
             'MESH_input_soil_levels.txt',
             'MESH_input_reservoir.txt',
             'MESH_parameters.txt',
-            'output_balance.txt',
+            'outputs_balance.txt',
             'MESH_parameters_CLASS.ini',
             'MESH_parameters_hydrology.ini',
             ]
+
+        # step logger for the MESH builder
+        self.step_logger = {
+            'analyze': False,
+        }
 
     def sanity_check(self) -> bool:
         """Perform sanity checks on the configured MESH instance."""
@@ -57,7 +66,7 @@ class MESH(Builder):
         if missing_files:
             raise FileNotFoundError(
                 f"The following required files are missing in the instance path "
-                f"{self.config['instance_path']}: {', '.join(missing_files)}"
+                f"`{self.config['instance_path']}`: {', '.join(missing_files)}"
             )
 
         # check for forcing file(s) by first looking for a "fname" in the
@@ -133,9 +142,7 @@ class MESH(Builder):
                 )
         return
 
-    def _analyze_mesh_class(
-        self,
-    ) -> Dict:
+    def _analyze_mesh_class(self) -> Dict:
         """Build parameter dictionary from existing
         `MESH_parameters_CLASS.ini` files.
 
@@ -268,10 +275,158 @@ class MESH(Builder):
 
             return case_entry, info_entry, gru_entry
 
-        def init(self, cache: PathLike = None) -> None:
-            """Initialize the MESH model calibration builder instance."""
-            # perform sanity checks
-            self.sanity_check()
+    def _analyze_mesh_hydrology(self) -> Dict:
+        """
+        Analyze the hydrology components of the MESH model.
+        """
+        # extract sections from the hydrology file
+        sections = hydrology_section_divide(
+            os.path.join(self.config['instance_path'], 'MESH_parameters_hydrology.ini')
+        )
 
+        # first, the routing dictionary
+        routing_df = pd.read_csv(StringIO(sections[2]), comment='#', sep='\s+', index_col=0, skiprows=1, header=None)
+        routing_df.index = routing_df.index.str.lower()
+        # we should return a list of values
+        routing_dict = [v for v in routing_df.to_dict().values()]
 
-            return
+        # and second, the hydrology dictionary
+        hydrology_df = pd.read_csv(StringIO(sections[4]), comment='#', sep='\s+', index_col=0, skiprows=2, header=None)
+        hydrology_df.index = hydrology_df.index.str.lower()
+        # and we return a dictionary of this
+        hydrology_dict = hydrology_df.to_dict()
+
+        return routing_dict, hydrology_dict
+
+    def analyze(self, cache: PathLike = None) -> None:
+        """Initialize the MESH model calibration builder instance."""
+        # perform sanity checks
+        self.sanity_check()
+
+        # analyze the CLASS file and build the parameter dictionaries
+        # for MESH's specific parameter analysis functions, the `case_entry`
+        # and `info_entry` dictionaries are also returned, but not used in
+        # calibration process
+        case_entry, info_entry, class_dict = self._analyze_mesh_class()
+
+        # analyze hydrology and routing files and build the parameter dictionaries
+        routing_dict, hydrology_dict = self._analyze_mesh_hydrology()
+
+        # model's raw parameters dictionary
+        # the keys are hard-coded and documented in the model-specific
+        # MESH builder documentation
+        self.parameters = {
+            'class_dict': class_dict,
+            'hydrology_dict': hydrology_dict,
+            'routing_dict': routing_dict,
+        }
+
+        # add the step logger entry
+        self.step_logger['analyze'] = True
+
+        return
+
+    @property
+    def computational_units(self) -> Dict[str, int]:
+        """Return a dictionary with the number of computational units
+        for each element in the `parameters` dictionary object"""
+        if self.step_logger['analyze']:
+            return {
+                'class_dict': len(self.parameters['class_dict']),
+                'hydrology_dict': len(self.parameters['hydrology_dict']),
+                'routing_dict': len(self.parameters['routing_dict']),
+            }
+        else:
+            raise RuntimeError(
+                "The `analyze` method must be called before accessing "
+                "the `computational_units` property."
+            )
+
+        return
+
+    @property
+    def parameter_constraints(self):
+        """Hard-coded parameter constraints for MESH model parameters.
+        The mathematical representation of these constraints are 
+        """
+        # define a list of parameters that need to be included in contraints
+        # these are MESH-specific --- hard-coded values
+        constraints_params_template = ['clay', 'sand']
+        # and building invidiual parameters present in all MESH configurations
+        constraint_params = []
+
+        # default is assuming MESH has 3 soil layers
+        for i in range(1, 4):
+            # iterate over the parameter template values
+            for p in constraints_params_template:
+                # create the parameter name
+                param_name = f"{p.lower()}{i}"
+                # append to the list
+                constraint_params.append(param_name)
+
+        if self.step_logger['analyze']:
+            # hard-coded parameter constraints for MESH model parameters
+            # the keys are hard-coded and documented in the model-specific
+            # MESH builder documentation
+            return {
+                'class_dict': constraint_params,
+            }
+        else:
+            raise RuntimeError(
+                "The `analyze` method must be called before accessing "
+                "the `parameter_constraints` property."
+            )
+
+        return
+
+    def build(
+        self,
+        save_path: PathLike = None) -> None:
+        """Build the MESH calibration workflow.
+
+        In this part, the bounds are taken into account and the necessary
+        parameter dictionaries are templated.
+
+        Also, if model has not been analyzed yet, it will be analyzed first."""
+        # check whether the instance has been analyzed
+        if not self.step_logger['analyze']:
+            self.analyze()
+
+        # if no save_path is provided, raise an exception
+        if save_path is None:
+            raise RuntimeError("A valid `save_path` must be provided"
+                               " to build the MESH model instance.")
+
+        # given the parameter bounds in self.config['parameter_bounds'],
+        # the necessary parameter dictionaries are templated and saved
+
+        # initialize the `templated_parameters` dictionary
+        self.templated_parameters = self.parameters.copy()
+
+        for group_name, group in self.config['parameter_bounds'].items():
+            # building the templated_parameters dictionary
+            # for each parameter group in the `parameters` dictionary
+            for unit in group.keys():
+                # iterate over the computational units
+                # update the values of parameters in each unit
+                unit_params = group[unit]
+                # input can be either a dictionary or a list
+                for p in unit_params.keys():
+                    if isinstance(self.parameters[group_name], dict):
+                        # iterate over the parameters in the unit
+                        if p in self.parameters[group_name][unit].keys():
+                            # updating the target group dictionary
+                            self.templated_parameters[group_name][unit][p] = unit_params[p]
+
+                    elif isinstance(self.parameters[group_name], list):
+                        if p in self.parameters[group_name][unit - 1].keys():
+                            # updating the target group entry dictionary
+                            self.templated_parameters[group_name][unit - 1][p] = unit_params[p]
+
+                    else:
+                        raise TypeError(
+                            "The parameter bounds for each computational unit "
+                            "must be provided as a dictionary or a list."
+                        )
+
+        return

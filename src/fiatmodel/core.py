@@ -36,6 +36,7 @@ class Calibration(object):
         model_software: str = 'mesh',
         calibration_config: Dict = None,
         model_config: Dict = None,
+        observation_config: Dict = None,
     ) -> None:
         """
         Initialize the Calibration class.
@@ -64,12 +65,23 @@ class Calibration(object):
             raise TypeError('`calibration_config` must be a dictionary')
         if model_config is not None and not isinstance(model_config, dict):
             raise TypeError('`model_config` must be a dictionary')
+        if observation_config is not None and not isinstance(observation_config, dict):
+            raise TypeError('`observation_config` must be a dictionary')
 
         # assign object attributes
         self.calibration_software = calibration_software.lower()
         self.model_software = model_software.lower()
         self.calibration_config = calibration_config
         self.model_config = model_config
+        self.observation_config = observation_config
+
+        # build the model-specific object
+        match self.model_software:
+            case 'mesh':
+                from fiatmodel.models.mesh import MESH
+                self.model = MESH(config=self.model_config)
+            case _:
+                raise ValueError(f"Unsupported model software: {self.model_software}")
 
         return
 
@@ -93,10 +105,6 @@ class Calibration(object):
     def observations(self):
         """Load and process observational data based on
         `self.model_config` dictionary."""
-        return
-
-    def build(self, save_path: PathLike = None):
-        """Build the calibration workflow."""
         return
 
     def evaluate_model(self):

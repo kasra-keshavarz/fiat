@@ -1,7 +1,16 @@
 # built-in imports
-from typing import Dict
+from typing import (
+    Dict,
+    Union,
+    List,
+)
+from pathlib import Path
 
 import re
+import os
+
+# NameType type alias for parameter names
+NameType = Union[str, int, float]
 
 def remove_comments(
     string
@@ -408,3 +417,69 @@ def parse_class_prog3(
     }
 
     return prog_params
+
+def iter_sections(
+    text: str,
+    drop_separators: bool=True,
+):
+    # default re directives
+    HEADER_RE = re.compile(r'^#{3,}\s*(.*?)\s*#*\s*$', re.MULTILINE)
+    SEP_LINE_RE = re.compile(r'^-{3,}#.*$')
+
+    # defining matching headers
+    matches = list(HEADER_RE.finditer(text))
+    def not_sep(line):
+        return not (drop_separators and SEP_LINE_RE.match(line))
+
+    if not matches:
+        body = "\n".join(l for l in text.splitlines() if not_sep(l)).strip()
+        if body:
+            yield ("Preamble", body)
+        return
+
+    # preamble
+    first_start = matches[0].start()
+    if first_start > 0:
+        pre_lines = [l for l in text[:first_start].splitlines() if not_sep(l)]
+        pre = "\n".join(pre_lines).strip()
+        if pre:
+            yield ("Preamble", pre)
+
+    # extracting sections
+    for i, m in enumerate(matches):
+        header = m.group(1).strip()
+        body_start = m.end()
+        body_end = matches[i+1].start() if i+1 < len(matches) else len(text)
+        block = text[body_start:body_end]
+        lines = [l for l in block.splitlines() if not_sep(l)]
+        body = "\n".join(lines).strip('\n')
+        yield (header, body)
+
+def hydrology_section_divide(
+    hydrology_file: os.PathLike | str,
+) -> List[str]:
+    """
+    """
+    text = Path(hydrology_file).read_text(encoding="utf-8")
+    sections = [b for h, b in iter_sections(text)]
+
+    return sections
+
+def param_name_gen(
+    computational_unit: NameType,
+    name: NameType,
+) -> str:
+    """Generalized method to template parameter names
+    based on hydrological computational unit (gru, hru,
+    etc.) and the name of the parameter
+    """
+    # making strings
+    _unit = str(computational_unit)
+    _name = str(name)
+
+    # A naming template like the following can be
+    # generalized to all models: _+`_unit`+`_name`
+    param_name = '_' + _unit.upper() + _name.upper()
+    
+    return param_name
+
