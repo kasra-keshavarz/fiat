@@ -3,7 +3,7 @@ Limited dictionaries with names consistent among other "calibration"
 methods.
 '''
 
-_algorithm_equivalence = {
+_algorithm_equivalents = {
     'bisectionalgorithm': 'BisectionAlg',
     'fletcher-reeves': 'FletchReevesAlg',
     'levenberg-marquardt': 'LevMar',

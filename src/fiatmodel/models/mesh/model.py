@@ -5,6 +5,7 @@ import re
 import os
 import shutil
 import sys
+import warnings
 
 from typing import (
     Dict,
@@ -13,6 +14,10 @@ from typing import (
 )
 from pathlib import Path
 from io import StringIO
+
+# internal imports
+from ..builder import ModelBuilder
+from .funcs import *
 
 # custom types
 # PathLike type alias for file system paths
@@ -24,18 +29,20 @@ else:
 # NameType type alias for parameter names
 NameType = Union[str, int, float]
 
-# MESH-specific templating engine
-from .funcs import *
-
-# internal imports
-from fiatmodel.models.builder import Builder
-
-class MESH(Builder):
+class MESH(ModelBuilder):
     """Build the MESH calibration instantiation."""
 
-    def __init__(self, config: Dict) -> None:
+    def __init__(
+        self,
+        config: Dict,
+        calibration_software: Dict
+    ) -> None:
         # build the parent class
-        super().__init__(config)
+        super().__init__(
+            config,
+            calibration_software,
+            model_software='mesh'
+        )
 
         # build MESH-sepcific required files
         self.required_files = [
@@ -48,11 +55,6 @@ class MESH(Builder):
             'MESH_parameters_CLASS.ini',
             'MESH_parameters_hydrology.ini',
             ]
-
-        # step logger for the MESH builder
-        self.step_logger = {
-            'analyze': False,
-        }
 
     def sanity_check(self) -> bool:
         """Perform sanity checks on the configured MESH instance."""
@@ -166,13 +168,12 @@ class MESH(Builder):
         class_file = os.path.join(
             self.config['instance_path'], 'MESH_parameters_CLASS.ini'
         )
-        hydrology_file = os.path.join(
-            self.config['instance_path'], 'MESH_parameters_hydrology.ini'
-        )
+
         # read the MESH/CLASS file
         text = Path(class_file).read_text(encoding="utf-8")
 
-        # Split where there is at least one completely blank line (possibly with spaces)
+        # Split where there is at least one completely blank
+        # line (possibly with spaces)
         sections = re.split(r'\r?\n\s*\r?\n', text.strip())
 
         # first section is typically the information section
@@ -273,7 +274,7 @@ class MESH(Builder):
             # adding parameters
             gru_entry[idx].update({k: v for d in param_list for k, v in d.items()})
 
-            return case_entry, info_entry, gru_entry
+        return case_entry, info_entry, gru_entry
 
     def _analyze_mesh_hydrology(self) -> Dict:
         """
@@ -316,9 +317,9 @@ class MESH(Builder):
         # the keys are hard-coded and documented in the model-specific
         # MESH builder documentation
         self.parameters = {
-            'class_dict': class_dict,
-            'hydrology_dict': hydrology_dict,
-            'routing_dict': routing_dict,
+            'class': class_dict,
+            'hydrology': hydrology_dict,
+            'routing': routing_dict,
         }
 
         # add the step logger entry
@@ -347,55 +348,76 @@ class MESH(Builder):
     @property
     def parameter_constraints(self):
         """Hard-coded parameter constraints for MESH model parameters.
-        The mathematical representation of these constraints are 
+        The mathematical representation of these constraints are included
+        in the model-specific MESH builder documentation.
+
+        Since this is a required attribute for the parent `Builder` class,
+        a setter is also defined to avoid attribute errors. Also, it provides
+        the capability for users to assign extra parameter constraints.
         """
         # define a list of parameters that need to be included in contraints
         # these are MESH-specific --- hard-coded values
-        constraints_params_template = ['clay', 'sand']
-        # and building invidiual parameters present in all MESH configurations
-        constraint_params = []
+        if isinstance(self._parameter_constraints, dict) and len(self._parameter_constraints) == 0:
+            constraints_params_template = ['clay', 'sand']
+            # and building invidiual parameters present in all MESH configurations
+            constraint_params = []
 
-        # default is assuming MESH has 3 soil layers
-        for i in range(1, 4):
-            # iterate over the parameter template values
-            for p in constraints_params_template:
-                # create the parameter name
-                param_name = f"{p.lower()}{i}"
-                # append to the list
-                constraint_params.append(param_name)
+            # default is assuming MESH has 3 soil layers -- hard-coded
+            # FIXME: the 3 layer assumption should be revisited in future releases
+            #        both in FIAT-specific MESH builder and MESHFlow package.
+            for i in range(1, 4):
+                # iterate over the parameter template values
+                for p in constraints_params_template:
+                    # create the parameter name
+                    param_name = f"{p.lower()}{i}"
+                    # append to the list
+                    constraint_params.append(param_name)
+            
+            # calibration constraints for each class computation unit
+            # FIXME: kind of hard-coded assumption that the `class` parameters
+            #        are the only ones that need constraints. This should be
+            #        revisited in future releases.
+            calibration_constraints = {}
 
-        if self.step_logger['analyze']:
-            # hard-coded parameter constraints for MESH model parameters
-            # the keys are hard-coded and documented in the model-specific
-            # MESH builder documentation
-            return {
-                'class_dict': constraint_params,
-            }
-        else:
-            raise RuntimeError(
-                "The `analyze` method must be called before accessing "
-                "the `parameter_constraints` property."
-            )
+            for unit in self.parameter_bounds['class'].keys():
+                # creating a set of parameters for the computational
+                # unit to be calibrated
+                calibrated_set = set(self.parameter_bounds['class'][unit].keys())
+
+                # check whether any of `constrain_params` elements are available
+                # in each computational unit's set of parameters
+                match = [x for _, x in enumerate(constraint_params) if x in calibrated_set]
+
+                # set it aside if match is found
+                if match is not None:
+                    calibration_constraints[unit] = match
+
+            if self.step_logger['analyze']:
+                # hard-coded parameter constraints for MESH model parameters
+                # the keys are hard-coded and documented in the model-specific
+                # MESH builder documentation
+                self._parameter_constraints = {
+                    'class': calibration_constraints,
+                }
+
+        return getattr(self, '_parameter_constraints')
+    @parameter_constraints.setter
+    def parameter_constraints(self, value: List[str]) -> None:
+        """Setter for the `parameter_constraints` property."""
+        if not isinstance(value, dict):
+            raise TypeError('`parameter_constraints` must be a dictionary')
+        self._parameter_constraints = value
 
         return
 
-    def build(
-        self,
-        save_path: PathLike = None) -> None:
-        """Build the MESH calibration workflow.
-
-        In this part, the bounds are taken into account and the necessary
-        parameter dictionaries are templated.
-
-        Also, if model has not been analyzed yet, it will be analyzed first."""
+    def prepare(self) -> None:
+        """Prepare MESH requirements for calibration including
+        parameter templating, bounds, and constraints. Once prepared,
+        the object can be used in the calibration templating process.
+        """
         # check whether the instance has been analyzed
         if not self.step_logger['analyze']:
             self.analyze()
-
-        # if no save_path is provided, raise an exception
-        if save_path is None:
-            raise RuntimeError("A valid `save_path` must be provided"
-                               " to build the MESH model instance.")
 
         # given the parameter bounds in self.config['parameter_bounds'],
         # the necessary parameter dictionaries are templated and saved
@@ -403,6 +425,8 @@ class MESH(Builder):
         # initialize the `templated_parameters` dictionary
         self.templated_parameters = self.parameters.copy()
 
+        # define parameter names that will be involved
+        # in the calibration process
         for group_name, group in self.config['parameter_bounds'].items():
             # building the templated_parameters dictionary
             # for each parameter group in the `parameters` dictionary
@@ -416,17 +440,19 @@ class MESH(Builder):
                         # iterate over the parameters in the unit
                         if p in self.parameters[group_name][unit].keys():
                             # updating the target group dictionary
-                            self.templated_parameters[group_name][unit][p] = unit_params[p]
+                            self.templated_parameters[group_name][unit][p] = param_name_gen(unit, p)
 
                     elif isinstance(self.parameters[group_name], list):
                         if p in self.parameters[group_name][unit - 1].keys():
                             # updating the target group entry dictionary
-                            self.templated_parameters[group_name][unit - 1][p] = unit_params[p]
+                            self.templated_parameters[group_name][unit - 1][p] = param_name_gen(unit, p)
 
                     else:
                         raise TypeError(
                             "The parameter bounds for each computational unit "
                             "must be provided as a dictionary or a list."
                         )
+        # define parameter bounds
+        self.parameter_bounds = self.config['parameter_bounds']
 
         return

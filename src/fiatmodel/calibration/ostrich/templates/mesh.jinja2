@@ -15,9 +15,9 @@
     {{- " " * (column - (val | string | length) - cursor - 1) -}}
 {% endmacro %}
 {#
-   ============================
+   ==========================
    OSTRICH Configuration File
-   ============================
+   ==========================
 #}
 {# Defining variable used throughout the template file #}
 {% set algorithm = info.get('algorithm') %}
@@ -25,14 +25,14 @@
 {% set algorithm_specs = info.get('algorithm_specs') %}
 {# And, if `algorithm_specs` exists, we need a name equivalent for
    the Begin<name>Alg and End<name>Alg blocks #}
-{% set algorithm_name = default_dicts._algorithm_names.get(algorithm | lower) %}
+{% set algorithm_name = default_dicts._algorithm_equivalents.get(algorithm | lower) %}
 {# Other relevant variables can be defined as following #}
 {% set metric = info.get('metric') %}
 {% set random_seed = info.get('random_seed') %}
 {% set current_time = info.get('current_time') %}
 {% set parameters = info.get('parameters') %}
-{% set calibration_bounds = info.get('calibration_bounds') %}
-{% set constraints = info.get('constraints') %}
+{% set calibration_bounds = info.get('parameter_bounds') %}
+{% set constraints = info.get('parameter_constraints') %}
 {#
    ==================
    Main OSTRICH Block

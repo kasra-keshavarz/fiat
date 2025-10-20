@@ -4,3 +4,7 @@
 
 """FIATModel main entry point"""
 from .core import *
+
+available_model_software = [
+    'mesh',
+]

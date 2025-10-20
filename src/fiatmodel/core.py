@@ -17,7 +17,6 @@ from typing import (
     Union,
 )
 from pathlib import Path
-from io import StringIO
 
 # defining custom types
 if sys.version_info >= (3, 10):
@@ -32,8 +31,8 @@ class Calibration(object):
 
     def __init__(
         self,
-        calibration_software: str = 'ostrich',
-        model_software: str = 'mesh',
+        calibration_software: str,
+        model_software: str,
         calibration_config: Dict = None,
         model_config: Dict = None,
         observation_config: Dict = None,
@@ -78,10 +77,24 @@ class Calibration(object):
         # build the model-specific object
         match self.model_software:
             case 'mesh':
-                from fiatmodel.models.mesh import MESH
-                self.model = MESH(config=self.model_config)
+                from .models.mesh import MESH
+                self.model = MESH(
+                    config=self.model_config,
+                    calibration_software=self.calibration_software,
+                )
             case _:
                 raise ValueError(f"Unsupported model software: {self.model_software}")
+
+        # build the calibration-specific object
+        match self.calibration_software:
+            case 'ostrich':
+                from .calibration import OstrichTemplateEngine
+                self.calibration = OstrichTemplateEngine(
+                    config=self.calibration_config,
+                    model=self.model,
+                )
+            case _:
+                raise ValueError(f"Unsupported calibration software: {self.calibration_software}")
 
         return
 
