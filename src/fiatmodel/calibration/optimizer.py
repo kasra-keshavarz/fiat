@@ -126,6 +126,25 @@ class OptimizerTemplateEngine(object):
         """
         raise NotImplementedError("This method should be implemented by subclasses.")
 
+    def generate_model_templates(
+        self,
+        output_path: PathLike,
+    ) -> None:
+        """
+        Generate a model file based on the provided parameters
+        and a template file.
+
+        Parameters
+        ----------
+        output_path : PathLike
+            The path where the generated model file will be saved.
+
+        Returns
+        -------
+        None
+        """
+        raise NotImplementedError("This method should be implemented by subclasses.")
+
     def sanity_checks(self) -> None:
         """
         Perform sanity checks on the configuration.
@@ -167,3 +186,14 @@ class OptimizerTemplateEngine(object):
         None
         """
         raise NotImplementedError("This method should be implemented by subclasses.")
+
+    def _create_dir(self, path: PathLike) -> None:
+        """Create directory if it does not exist."""
+        # if `path` exists, give a warning and create the path nonetheless
+        if os.path.exists(path):
+            warnings.warn(f"The directory {path} already exists."
+                          " Contents may be overwritten.", UserWarning)
+        # create the directory
+        os.makedirs(path, exist_ok=True)
+
+        return

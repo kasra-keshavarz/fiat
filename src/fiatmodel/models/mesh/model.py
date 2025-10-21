@@ -55,9 +55,22 @@ class MESH(ModelBuilder):
             'MESH_parameters_CLASS.ini',
             'MESH_parameters_hydrology.ini',
             ]
+        # build MESH-specific required directories
+        self.required_dirs = [
+            'results',
+        ]
 
     def sanity_check(self) -> bool:
-        """Perform sanity checks on the configured MESH instance."""
+        """Perform sanity checks on the configured MESH instance.
+
+        Two main tasks are performed here:
+        1. Check for the existence of required files in the instance path.
+        2. Check for the existence of forcing file(s) as specified in the
+           `MESH_input_run_options.ini` file; if found, adjust the path to
+           be absolute paths, as for calibration, we want to avoid moving
+           the forcing files, but have all instances point to the same location
+           to read the forcing data.
+        """
         # check self.instance_path and see if all files in `required_files` exist
         missing_files = []
         for file in self.required_files:
@@ -77,35 +90,56 @@ class MESH(ModelBuilder):
         run_options_path = os.path.join(
             self.config['instance_path'], 'MESH_input_run_options.ini'
         )
-        try:
-            # see if a single forcing file is specified
-            pattern = re.compile(r"\bfname\s*=\s*([^ \t#;]+)")
-            with open(run_options_path, "r", encoding="utf-8") as f:
-                for line in f:
+
+        # assign patterns to search in `run_options_path` file
+        fname_pattern = re.compile(r"\bfname\s*=\s*([^ \t#;]+)")
+        fpath_pattern = re.compile(r"\bfpath\s*=\s*([^ \t#;]+)")
+        forcinglist_pattern = re.compile(r"^\s*FORCINGFILESLIST\s+([^\s#;]+)")
+        patterns_list = [
+            ('fname', fname_pattern),
+            ('fpath', fpath_pattern),
+            ('FORCINGFILESLIST', forcinglist_pattern),
+        ]
+
+        with open(run_options_path, "r", encoding="utf-8") as f:
+            for line in f:
+                for pattern_name, pattern in patterns_list:
                     m = pattern.search(line)
                     if m:
-                        forcing_file = m.group(1)
-                        # assign self.forcing_file to the full path
-                        forcing_file_path = os.path.join(
-                            self.config['instance_path'], forcing_file + '.nc',
-                        )
-                        if not os.path.isfile(forcing_file_path):
-                            raise FileNotFoundError(
-                                f"The forcing file {forcing_file} specified in "
-                                f"{run_options_path} is not found."
+                        if pattern_name in ['fname', 'fpath']:
+                            forcing_file = m.group(1).rstrip('\r\n')
+                            # assign self.forcing_file to the full path
+                            forcing_file_path = os.path.join(
+                                self.config['instance_path'], forcing_file + '.nc',
                             )
-                        self.forcing_file = [forcing_file_path]
-                        break
+                            if not os.path.isfile(forcing_file_path):
+                                raise FileNotFoundError(
+                                    f"The forcing file {forcing_file} specified in "
+                                    f"{run_options_path} is not found."
+                                )
+                            # turning into absolute path and assign to self.forcing_file
+                            self.forcing_file = [os.path.abspath(forcing_file_path)]
 
-        except:
-            try:
-                # see if multiple forcing files are specified within the model instance
-                pattern = re.compile(r"^\s*FORCINGFILESLIST\s+([^\s#;]+)")
-                with open(run_options_path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        m = pattern.search(line)
-                        if m:
-                            forcing_file_list = m.group(1)
+                            # before making changes, back up the original run options file
+                            backup_path = run_options_path + '.bak'
+                            shutil.copy(run_options_path, backup_path) # no need to preserve metadata
+
+                            # if `fname` is matched, we need to update that entry to be absolute path using `fpath`
+                            # read the original file and replace the entry
+                            with open(backup_path, 'r', encoding="utf-8") as fin, open(run_options_path, 'w', encoding="utf-8") as fout:
+                                for line in fin:
+                                    if pattern.search(line):
+                                        m = pattern.search(line)
+                                        start, end = m.span()
+                                        new_line = line[:start] + f"fpath={self.forcing_file[0]}" + line[end:]
+                                        if not new_line.endswith('\n'):
+                                            new_line += '\n'
+                                        fout.write(new_line)
+                                    else:
+                                        fout.write(line)
+
+                        elif pattern_name == 'FORCINGFILESLIST':
+                            forcing_file_list = m.group(1).rstrip('\r\n')
                             # read the forcing file list and check if all files exist
                             with open(os.path.join(self.config['instance_path'], forcing_file_list), "r", encoding="utf-8") as f:
                                 for line in f:
@@ -115,18 +149,38 @@ class MESH(ModelBuilder):
                                             f"The forcing file {forcing_file} listed in "
                                             f"{forcing_file_list} is not found."
                                         )
-                            # break out of the loop
-                            # assign self.forcing_file to the list of full paths
+                            # assign self.forcing_file to the list of full absolute paths
                             self.forcing_file = [
-                                os.path.join(self.config['instance_path'], line.strip())
+                                os.path.abspath(os.path.join(self.config['instance_path'], line.strip()))
                                 for line in open(os.path.join(self.config['instance_path'], forcing_file_list), "r", encoding="utf-8")
                             ]
+                            # also add the forcing_file_list to the `self.required_files`
+                            self.required_files.append(os.path.abspath(os.path.join(self.config['instance_path'], forcing_file_list)))
+                            # the corresponding entry file (the file including 
+                            # forcing data paths) to include the absolute paths;
+                            # so no need to change the run options file itself
+                            # before making changes, back up the original forcing file list
+                            backup_path = os.path.join(
+                                self.config['instance_path'],
+                                forcing_file_list + '.bak'
+                            )
+                            shutil.copy(
+                                os.path.join(self.config['instance_path'], forcing_file_list),
+                                backup_path
+                            ) # no need to preserve metadata
+                            # now update the forcing file list to include absolute paths
+                            with open(os.path.join(self.config['instance_path'], forcing_file_list), 'w', encoding="utf-8") as fout:
+                                for f in self.forcing_file:
+                                    fout.write(f"{f}\n")
+
+                            # break out of the loops
                             break
 
-            except:
-                raise FileNotFoundError(
-                    f"The required forcing file(s) not found."
-                )
+                        else:
+                            raise FileNotFoundError(
+                                f"The required forcing file(s) not found."
+                            )
+
         # if we reach here, all checks passed, so return True
         return True
 

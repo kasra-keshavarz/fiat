@@ -3,7 +3,7 @@ Templating utilities for the "MESH" instantiations.
 """
 # built-in imports
 import sys
-import warnings
+import shutil
 import os
 import json
 
@@ -193,13 +193,46 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
 
         return
 
-    def _create_dir(self, path: PathLike) -> None:
-        """Create directory if it does not exist."""
-        # if `path` exists, give a warning and create the path nonetheless
-        if os.path.exists(path):
-            warnings.warn(f"The directory {path} already exists."
-                          " Contents may be overwritten.", UserWarning)
-        # create the directory
-        os.makedirs(path, exist_ok=True)
+    def generate_model_templates(
+        self,
+        output_path: PathLike,
+    ) -> None:
+        """
+        Generate a model files based on the provided parameters
+        and a template file. The forcing files is prefered not to
+        be moved, as it may create excessive data duplication.
+
+        Parameters
+        ----------
+        output_path : PathLike
+            The path where the generated model file will be saved.
+
+        Returns
+        -------
+        None
+        """
+        # copy the required files to `output_path/model/`
+        model_output_path = os.path.join(
+            output_path,
+            'model',
+        )
+        self._create_dir(model_output_path)
+
+        # copying required files---note that forcing files are not copied
+        # and are not included in `self.mode.required_files` object on
+        # purpose
+        for file in self.model.required_files:
+            shutil.copy(
+                os.path.join(self.model.config['instance_path'], file),
+                model_output_path,
+            )
+
+        # if there are required directories, copy them as well
+        for dir in self.model.required_dirs:
+            shutil.copytree(
+                os.path.join(self.model.config['instance_path'], dir),
+                os.path.join(model_output_path, dir),
+            )
 
         return
+

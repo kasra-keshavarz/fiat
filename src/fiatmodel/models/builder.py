@@ -50,8 +50,9 @@ class ModelBuilder(object):
         # some of the following 
         # assign an empty list for the `forcing_file` attribute 
         self.forcing_file = []
-        # similarly, for the `required_files` attribute
+        # similarly, for the `required_files` and `required_dirs` attributes
         self.required_files = []
+        self.required_dirs = []
         # logging various steps
         self.step_logger = {
             'analyze': False,
