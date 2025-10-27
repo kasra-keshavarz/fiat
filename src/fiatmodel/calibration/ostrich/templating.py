@@ -232,7 +232,7 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
             shutil.copytree(
                 os.path.join(self.model.config['instance_path'], dir),
                 os.path.join(model_output_path, dir),
+                dirs_exist_ok=True,
             )
 
         return
-

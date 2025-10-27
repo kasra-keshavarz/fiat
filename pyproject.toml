@@ -24,7 +24,10 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dependencies = []
+dependencies = [
+  "pint-xarray>=0.5.1",
+  "pint>=0.24.4",
+]
 
 [project.urls]
 Documentation = "https://github.com/kasra-keshavarz/fiatmodel#readme"

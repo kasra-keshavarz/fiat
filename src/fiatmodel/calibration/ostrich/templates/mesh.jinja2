@@ -27,7 +27,7 @@
    the Begin<name>Alg and End<name>Alg blocks #}
 {% set algorithm_name = default_dicts._algorithm_equivalents.get(algorithm | lower) %}
 {# Other relevant variables can be defined as following #}
-{% set metric = info.get('metric') %}
+{% set objective_functions = info.get('objective_functions') %}
 {% set random_seed = info.get('random_seed') %}
 {% set current_time = info.get('current_time') %}
 {% set parameters = info.get('parameters') %}
@@ -55,7 +55,7 @@
 ProgramType         {{ algorithm }}
 ModelExecutable     ./etc/scripts/eval.py
 ModelSubdir         cpu_
-ObjectiveFunction   gcop
+ObjectiveFunction   GCOP
 
 # Useful optional variables
 PreserveModelOutput    ./etc/scripts/archive.sh
@@ -85,17 +85,49 @@ Begin{{ algorithm_name }}
 End{{ algorithm_name }}
 {% endif %}
 
+{% if objective_functions is defined and objective_functions is mapping %}
 # Response variables
 BeginResponseVars
   # name        filename ;                                 keyword      line   col   token
-  {{ metric }}     ./etc/evaluation/{{ metric }}.csv ;             OST_NULL     0      1     ','
+  {% for flux in objective_functions.keys() %}
+    {% for metric in objective_functions.get(flux).keys() %}
+    {# Now itearte over the elements of the cost function and see how many are available #}
+      {% for of in objective_functions.get(flux).get(metric) %}
+        {% set idx = loop.index %}
+  {{ flux }}_{{ metric }}_{{ idx }}     ./etc/evaluation/{{ flux }}_{{ metric }}_{{ idx }}.csv ;             OST_NULL     0      1     ','
+      {% endfor %}
+    {% endfor %}
+  {% endfor %}
 EndResponseVars
 
 # Objective function specs
 BeginGCOP
-  CostFunction     {{ metric }}
+  {% for flux in objective_functions.keys() %}
+    {% for metric in objective_functions.get(flux).keys() %}
+      {% for of in objective_functions.get(flux).get(metric) %}
+        {# Now itearte over the elements of the cost function and see how many are available #}
+        {% set idx = loop.index %}
+  CostFunction     {{ flux }}_{{ metric }}_{{ idx }}
+      {% endfor %}
+    {% endfor %}
+  {% endfor %}
   PenaltyFunction  APM
 EndGCOP
+{% endif %}
+
+{% if objective_functions is defined and objective_functions is mapping %}
+# Calculation methods for cost/objective functions
+# CalculationMethod
+  {% for flux in objective_functions.keys() %}
+    {% for metric in objective_functions.get(flux).keys() %}
+      {% for of in objective_functions.get(flux).get(metric) %}
+        {% set idx = loop.index %}
+  # {{ flux }}_{{ metric }}_{{ idx }}: {{ of }}
+      {% endfor %}
+    {% endfor %}
+  {% endfor %}
+# EndCalculationMethod
+{% endif %}
 
 {% if parameters is iterable and parameters %}
 # File pairs
