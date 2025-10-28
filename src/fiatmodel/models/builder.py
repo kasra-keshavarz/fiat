@@ -2,6 +2,7 @@
 # builtin imports
 from typing import (
     Dict,
+    Sequence,
     Union,
 )
 from pathlib import Path
@@ -29,6 +30,7 @@ class ModelBuilder(object):
         config: Dict,
         calibration_software: str,
         model_software: str,
+        fluxes: Sequence[str] = [],
     ) -> None:
          # store the configuration dictionary
         if not isinstance(config, dict):
@@ -50,6 +52,8 @@ class ModelBuilder(object):
         # some of the following 
         # assign an empty list for the `forcing_file` attribute 
         self.forcing_file = []
+        # initialize the `forcing_freq` attribute to None
+        self.forcing_freq = None
         # similarly, for the `required_files` and `required_dirs` attributes
         self.required_files = []
         self.required_dirs = []
@@ -62,10 +66,14 @@ class ModelBuilder(object):
 
         # necessary attributes to be populated later by child classes
         self.parameters = {}
+        self.others = {}
         self.templated_parameters = {}
         self.parameter_constraints = {} # to be overridden by child classes
         self.parameter_bounds = {} # to be overridden by child classes
         self.model_software = model_software.lower()
+
+        # fluxes for outputing
+        self.fluxes = fluxes
 
         return
 

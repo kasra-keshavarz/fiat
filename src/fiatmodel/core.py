@@ -2,16 +2,21 @@
 
 # 3rd-party imports
 import pandas as pd
-import pint
 import xarray as xr
 import numpy as np
-import pint_xarray  # noqa: F401  # registers the .pint accessor
+import numexpr as ne
 
+import HydroErr
+import pint
+import pint_xarray  # noqa: F401  # registers the .pint accessor
 
 # build-in imports
 import json
 import sys
 import os
+import importlib
+import subprocess
+import re
 
 from typing import (
     Dict,
@@ -28,14 +33,29 @@ else:
     PathLike = Union[str, Path]
 
 # defining global constants
+# Pint registry
 ureg = pint.UnitRegistry()
 # This line fixes: ValueError: invalid registry. Please enable 'force_ndarray_like' or 'force_ndarray'.
 ureg.force_ndarray_like = True  # or: ureg.force_ndarray = True (stricter)
 pint.set_application_registry(ureg)
+# global re patterns for numeric string parsing:
+#   Precompile regexes for speed/readability
+_INT_RE = re.compile(r'^[-+]?\d+$')
+_FLOAT_RE = re.compile(
+    r"""^[-+]?(                # optional sign
+        (?:\d+\.\d*|\d*\.\d+)  # something with a decimal point
+        (?:[eE][-+]?\d+)?      # optional exponent
+        |
+        \d+[eE][-+]?\d+        # or integer with exponent (e.g. 1e6)
+    )$""",
+    re.X
+)
+# current enviornment
+MYENV = os.environ.copy()
 
 
 class Calibration(object):
-    """
+    """Main Calibration class of FIAT package.
     """
 
     def __init__(
@@ -107,6 +127,7 @@ class Calibration(object):
                 self.model = MESH(
                     config=self.model_config,
                     calibration_software=self.calibration_software,
+                    fluxes=self.calibration_config.get('objective_functions').keys(),
                 )
             case _:
                 raise ValueError(f"Unsupported model software: {self.model_software}")
@@ -360,7 +381,26 @@ class Calibration(object):
         
         return
 
-# "private" helper functions
+    def eval(
+        self,
+        instance_path: PathLike
+    ) -> None:
+        """Evaluate the model instance using the calibration software.
+        This function is created to iteratively call model instances
+        during the calibration process.
+        """
+        # import necessary model-specific workflow package for
+        # evaluation needs
+        match self.model_software:
+            case 'mesh':
+                import meshflow as mf
+            case _:
+                raise ValueError(f"Unsupported model software: {self.model_software}")
+            
+        # 
+        return
+
+# "private" global helper functions
 def _union_sorted_times(all_times: List[pd.DatetimeIndex]) -> pd.DatetimeIndex:
     if not all_times:
         return pd.DatetimeIndex([])
@@ -368,3 +408,36 @@ def _union_sorted_times(all_times: List[pd.DatetimeIndex]) -> pd.DatetimeIndex:
     for t in all_times[1:]:
         out = out.union(t)
     return out.sort_values()
+
+
+def _parse_numeric_string(s: str):
+    """
+    Try to interpret a numeric-looking string as int or float.
+    Return the converted number, or the original string if not numeric.
+    """
+    if _INT_RE.match(s):
+        # Keep as int if it fits typical Python int (Python int is unbounded anyway)
+        return int(s)
+    if _FLOAT_RE.match(s):
+        # Anything with decimal point or exponent
+        return float(s)
+    return s  # not numeric-looking
+
+def _convert_numeric_strings(obj):
+    """
+    Recursively walk lists/dicts and convert numeric-like strings.
+    """
+    if isinstance(obj, dict):
+        return {k: _convert_numeric_strings(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_convert_numeric_strings(v) for v in obj]
+    if isinstance(obj, str):
+        return _parse_numeric_string(obj.strip())
+    return obj  # leaves int, float, bool, None, etc. untouched
+
+def _make_object_hook():
+    def object_hook(d):
+        for k, v in d.items():
+            d[k] = _convert_numeric_strings(v)  # reuse earlier function
+        return d
+    return object_hook

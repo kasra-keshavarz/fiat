@@ -140,7 +140,7 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
             ) as f:
                 json_obj = json.dumps(params, indent=4)
                 f.write(json_obj)
-            
+
             if return_templates:
                 objects.append(params)
 
@@ -190,6 +190,22 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
             model=self.model.model_software.lower())
         with open(archive_script_path, 'w') as f:
             f.write(archive_content)
+
+        # if `others` attribute is populated (not an empty dictionary)
+        if len(self.model.others) > 0:
+            for group, params in self.model.others.items():
+                # dump JSON files for each parameter group
+                with open(
+                    os.path.join(
+                        output_path,
+                        'etc',
+                        'templates',
+                        f'{group}.json',
+                    ),
+                    'w',
+                ) as f:
+                    json_obj = json.dumps(params, indent=4)
+                    f.write(json_obj)
 
         return
 

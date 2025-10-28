@@ -27,6 +27,7 @@ classifiers = [
 dependencies = [
   "pint-xarray>=0.5.1",
   "pint>=0.24.4",
+  "numexpr>=2.14.1",
 ]
 
 [project.urls]

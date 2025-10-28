@@ -1,14 +1,15 @@
 """Module for building a MESH calibration instantiation."""
 import pandas as pd
+import xarray as xr
 
 import re
 import os
 import shutil
 import sys
-import warnings
 
 from typing import (
     Dict,
+    Sequence,
     Union,
     List,
 )
@@ -35,13 +36,15 @@ class MESH(ModelBuilder):
     def __init__(
         self,
         config: Dict,
-        calibration_software: Dict
+        calibration_software: Dict,
+        fluxes: Sequence[str] = [],
     ) -> None:
         # build the parent class
         super().__init__(
             config,
             calibration_software,
-            model_software='mesh'
+            model_software='mesh',
+            fluxes=fluxes,
         )
 
         # build MESH-sepcific required files
@@ -50,6 +53,7 @@ class MESH(ModelBuilder):
             'MESH_input_run_options.ini',
             'MESH_input_soil_levels.txt',
             'MESH_input_reservoir.txt',
+            'MESH_input_streamflow.txt',
             'MESH_parameters.txt',
             'outputs_balance.txt',
             'MESH_parameters_CLASS.ini',
@@ -180,6 +184,34 @@ class MESH(ModelBuilder):
                             raise FileNotFoundError(
                                 f"The required forcing file(s) not found."
                             )
+
+        # check the timeseries frequency of the forcing file(s)
+        # only checking one file is sufficient, as all forcing files
+        # should have the same frequency
+        freq = xr.infer_freq(
+            xr.open_dataset(self.forcing_file[0]).time
+        )
+        self.forcing_freq = freq
+
+        # make a backup of the original outputs_balance.txt file
+        outputs_balance_path = os.path.join(
+            self.config['instance_path'], 'outputs_balance.txt'
+        )
+        backup_outputs_balance_path = outputs_balance_path + '.bak'
+        shutil.copy(outputs_balance_path, backup_outputs_balance_path) # no need to preserve metadata
+
+        # create a new one and only print the fluxes that are
+        # necessary for calibration
+        with open(outputs_balance_path, 'w', encoding="utf-8") as fout:
+            fout.write(
+                "!MESH Outputs Balance File generate by FIAT\n"
+                "!Only the necessary fluxes for calibration are included here.\n"
+                "!Format: flux_name  output_frequency nc\n"
+            )
+            # hard-coded necessary fluxes for MESH calibration
+            necessary_fluxes = self.fluxes
+            for flux_name in necessary_fluxes:
+                fout.write(f"{flux_name.upper()}     {self.forcing_freq.upper()}   nc\n")
 
         # if we reach here, all checks passed, so return True
         return True
@@ -374,6 +406,11 @@ class MESH(ModelBuilder):
             'class': class_dict,
             'hydrology': hydrology_dict,
             'routing': routing_dict,
+        }
+
+        self.others = {
+            'case_entry': case_entry,
+            'info_entry': info_entry,
         }
 
         # add the step logger entry
