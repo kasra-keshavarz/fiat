@@ -18,4 +18,4 @@ pip install fiat
 
 ## License
 
-`fiat` is distributed under the terms of the [MIT](https://spdx.org/licenses/MIT.html) license.
+`fiat` is distributed under the terms of the AGPLv3.0 or later license.
