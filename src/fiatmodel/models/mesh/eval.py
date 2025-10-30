@@ -1,129 +1,179 @@
-#!/usr/bin/env python
-# coding: utf-8
+#!/usr/bin/env python3
 
-# data manipulation libraries
-import pandas as pd
-import numpy as np
-import xarray as xr
+"""Evaluation utilities for MESH models.
 
-# built-in libraries
-from itertools import product
-import os
+To make the evaluation as flexible and lightweight as possible, we use
+an individual script to perform the evaluation. This script is
+dynamically generated based on the FIAT configuration.
+"""
+
+# built-in imports
+import importlib
 import subprocess
-import sys
+import os
+import re
+import json
 
-# import HydroErr
-import HydroErr as he
+# external imports
+import xarray as xr
+import HydroErr
+import numexpr as ne
 
+# default environment
+my_env = os.environ.copy()
 
-# Here, we calibrate the models based on the `NSE` metric.
+# MESH-specific import
+import meshflow as mf
 
-# define calibration model
-# basic instructions
-basin_name = 'wolf'
-model = 'mesh'
-gauges = ['Wolf Creek at Alaska Highway (WCAH)']
-obj_func = 'nse'
-# start and end date for the calibration period
-cal_start = '1995-01-01T00:00:00'
-cal_end = '2010-12-31T23:00:00'
+# Precompile regexes for speed/readability
+_INT_RE = re.compile(r'^[-+]?\d+$')
+_FLOAT_RE = re.compile(
+    r"""^[-+]?(                # optional sign
+        (?:\d+\.\d*|\d*\.\d+)  # something with a decimal point
+        (?:[eE][-+]?\d+)?      # optional exponent
+        |
+        \d+[eE][-+]?\d+        # or integer with exponent (e.g. 1e6)
+    )$""",
+    re.X
+)
 
+# default environment
+my_env = os.environ.copy()
 
-# paths
-home = os.getenv('HOME')
-obs_path = f'{home}/Documents/github-repos/research-basin-benchmarking/1-model-setup/3-observations/wolf-creek-research-basin/post-processed-gauge-data/wolf-creek-gauge-data.nc'
+def _parse_numeric_string(s: str):
+    """
+    Try to interpret a numeric-looking string as int or float.
+    Return the converted number, or the original string if not numeric.
+    """
+    if _INT_RE.match(s):
+        # Keep as int if it fits typical Python int (Python int is unbounded anyway)
+        return int(s)
+    if _FLOAT_RE.match(s):
+        # Anything with decimal point or exponent
+        return float(s)
+    return s  # not numeric-looking
 
-# read observed data
-obs = xr.open_dataset(obs_path)
+def _convert_numeric_strings(obj):
+    """
+    Recursively walk lists/dicts and convert numeric-like strings.
+    """
+    if isinstance(obj, dict):
+        return {k: _convert_numeric_strings(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_convert_numeric_strings(v) for v in obj]
+    if isinstance(obj, str):
+        return _parse_numeric_string(obj.strip())
+    return obj  # leaves int, float, bool, None, etc. untouched
 
-if model == 'mesh':
-    # run MESH
-    command = (
-    'ml restore scimods; '
-    f'cd ./{model}; '
-    './sa_mesh;'
-    )
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        shell=True)
-    # specify the output file
-    sim_path = f'./{model}/results/QO_H.csv'
+def _make_object_hook():
+    def object_hook(d):
+        for k, v in d.items():
+            d[k] = _convert_numeric_strings(v)  # reuse earlier function
+        return d
+    return object_hook
 
-    # read the simulated results
-    try:
-        sim = pd.read_csv(
-            sim_path,
-            header=None,
-            index_col=0,
-            parse_dates=True,
-            date_format='%Y/%m/%d %H:%M:%S.000'
-        )
-    except: # if model crashes, so sim_path becomes corrupt
-        with open(f"./{model}/results/kge_2012.csv", "w") as file:
-            # write a terrible metric value 
-            # to indicate model crash
-            # OSTRICH assumes a minimization problem
-            file.write("2000\n")
-            sys.exit()
+if "__name__" == "__main__":
+    # read the `json` configuration file
+    with open("./etc/eval/eval.json", "r") as f:
+        eval_config = json.load(f, object_hook=_make_object_hook())
 
-    # drainage database path
-    ddb_path = f'./{model}/MESH_drainage_database.nc'
-    ddb = xr.open_dataset(
-        ddb_path,
-    )
-elif model == 'summa':
-    pass
-elif model == 'hype':
-    pass
+    # read the observation file
+    observations = xr.open_dataset('./etc/observations/observations.nc')
 
-# finding correspondence between MESH Rank and subbasin id
-basin_to_rank = ddb.Rank.to_pandas().to_dict()
-# reversing the dictionary above
-rank_to_basin = {int(k):v for (v, k) in basin_to_rank.items()}
-
-# drop columns with `NA` values (fictitious outlet basins)
-sim.dropna(axis=1, inplace=True)
-
-# change the column values from rank to subbasin id
-sim.columns = pd.Series(sim.columns).replace(rank_to_basin)
-
-# assign appropriate names
-sim.columns.name = 'LINKNO'
-sim.index.name = 'time'
-sim.name = 'sim'
-
-# create a xarray.Dataset
-sim_ds = sim.stack().to_xarray().to_dataset(name='sim')
-
-# select the gauge values form the `obs'
-obs_ts = obs[f'discharge'].sel(gauge_name=gauges).to_pandas()
-# select the sub-basin where the gauge is located
-link_no = obs['LINKNO'].sel(gauge_name=gauges)
-gauge_to_link = link_no.to_pandas().to_dict() # mapping
-link_to_gauge = {v: k for (k, v) in gauge_to_link.items()}
-# given the known link_no value, select the proper simulation ts
-sim_ts = sim_ds['sim'].sel(LINKNO=link_no).to_pandas()
-# change the column names so both DataFrames have matching columns
-sim_ts.columns = pd.Series(sim_ts.columns).replace(link_to_gauge)
-
-# revert back to xarray.Datasets for clarity of analysis
-sim_ts_ds = sim_ts.stack().to_xarray().to_dataset(name='sim')
-obs_ts_ds = obs_ts.stack().to_xarray().to_dataset(name='obs')
-
-# create joint dataset
-ds = xr.merge([sim_ts_ds, obs_ts_ds])
-# remove na values how=any!
-ds = ds.dropna(dim='time', how='any')
-
-for g in gauges:
-    # define dataframes
-    sim_df = ds['sim'].sel(gauge_name=g, time=slice(cal_start, cal_end))
-    obs_df = ds['obs'].sel(gauge_name=g, time=slice(cal_start, cal_end))
+    # files to be read
+    root_file_path = os.path.join('./etc', 'eval')
+    # first adding parameters
+    file_paths = {k: os.path.join(root_file_path, v + '.json')
+                  for k, v in eval_config.get('parameters').items()}
+    # then adding others
+    file_paths.update({k: os.path.join(root_file_path, v + '.nc')
+                       for k, v in eval_config.get('others').items()})
     
-    # calculate metrics - minimization problem
-    kge = -1 * (he.kge_2012(sim_df, obs_df))
+    # read the files in each file_paths and generate MESH input parameters
+    mesh_inputs = {}
+    for param_name, file_path in file_paths.items():
+        if file_path.endswith('.json'):
+            with open(file_path, 'r') as f:
+                mesh_inputs[param_name] = json.load(f, object_hook=_make_object_hook())
+        else:
+            raise ValueError(f"Unsupported file format for {file_path}")
+        
+    # use meshflow to generate the parameter files
+    # class
+    class_file = mf.utility.render_class_template(
+        class_case=mesh_inputs['case_entry'],
+        class_info=mesh_inputs['info_entry'],
+        class_grus=mesh_inputs['class']
+    )
+    # hydrology
+    hydrology_file = mf.utility.render_hydrology_template(
+        routing_params=mesh_inputs['routing'],
+        hydrology_params=mesh_inputs['hydrology'],
+    )
+    # apply changes to the MESH instance
+    with open(os.path.join(eval_config['model_instance_path'], "MESH_parameters_CLASS.ini"), "w", encoding="utf-8") as f:
+        f.write(class_file)
+    with open(os.path.join(eval_config['model_instance_path'], "MESH_parameters_hydrology.ini"), "w", encoding="utf-8") as f:
+        f.write(hydrology_file)
 
-with open(f"./{model}/results/kge_2012.csv", "w") as file:
-    file.write(f"{kge}\n")  # Using an f-string to format the float
+    # run the MESH model
+    subprocess.run(
+        eval_config['model_executable'],
+        cwd=eval_config['model_instance_path'],
+        check=True,
+        env=my_env)
 
+    # first read the time-series of obs/sim for
+    #      each element in the `obs` file
+    simulations = xr.open_mfdataset(
+        os.path.join(
+            eval_config['model_instance_path'],
+            eval_config['results_path'],
+            f) for f in eval_config['output_files']
+        )
+    
+    # resampling the time-series matching the observations time-step
+    simulations = simulations.resample(time=).mean
+
+    # extract names for the `observations` - can be hard-coded
+    station_ids = observations.subbasin.to_numpy().tolist()
+    station_names = observations.name.to_numpy().tolist()
+
+    # evaluate each objective function
+    of_values = {}
+
+    for flux, metrics in eval_config.get('objective_functions').items():
+        sims = {}
+        obs = {}
+        # start populating of_values
+        of_values[flux] = {}
+        # assign simulation results for the selected flux
+        for st in station_ids:
+            # sims dictionary
+            sims[observations['name'].sel(subbasin=st).to_numpy().tolist()] = simulations[flux].sel(subbasin=st).to_series()
+            # same for obs dictionary
+            obs[observations['name'].sel(subbasin=st).to_numpy().tolist()] = observations[flux].sel(subbasin=st).to_series()
+        # metric (for example, kge_2012), and ofs (list of individual objective functions
+        for metric, ofs in metrics.items():
+            # add elements to `of_values`
+            of_values[flux][metric] = []
+            # calculate the metric value
+            he_metric = getattr(HydroErr, metric)
+            metric_dict = {}
+            for name in obs.keys():
+                metric_dict[name] = he_metric(sims[name], obs[name])
+
+            for idx, of in enumerate(ofs): # a list of objective functions
+                result = ne.evaluate(of, local_dict=metric_dict)
+                of_values[flux][metric] = result
+
+                # write the of results to a .csv file (with only a single element)
+                with open(
+                    os.path.join(
+                        './etc',
+                        'eval',
+                        f'{flux.upper()}_{metric}_{idx}.csv',
+                    ),
+                    'w',
+                ) as f:
+                    f.write(f'{result}')

@@ -390,6 +390,13 @@ class MESH(ModelBuilder):
         # perform sanity checks
         self.sanity_check()
 
+        # given that sanity checks are passed, we can define the output
+        # files
+        for f in self.fluxes:
+            # FIXME: only netcdf files are currenlty support with MESH
+            output_file = f"{f.upper()}_{self.forcing_freq.upper()}_GRD.nc"
+            self.outputs.append(output_file)
+
         # analyze the CLASS file and build the parameter dictionaries
         # for MESH's specific parameter analysis functions, the `case_entry`
         # and `info_entry` dictionaries are also returned, but not used in

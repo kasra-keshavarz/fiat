@@ -74,6 +74,7 @@ class ModelBuilder(object):
 
         # fluxes for outputing
         self.fluxes = fluxes
+        self.outputs = []  # to be populated later by child classes
 
         return
 

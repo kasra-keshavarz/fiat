@@ -4,9 +4,7 @@
 import pandas as pd
 import xarray as xr
 import numpy as np
-import numexpr as ne
 
-import HydroErr
 import pint
 import pint_xarray  # noqa: F401  # registers the .pint accessor
 
@@ -14,16 +12,23 @@ import pint_xarray  # noqa: F401  # registers the .pint accessor
 import json
 import sys
 import os
-import importlib
-import subprocess
 import re
+import inspect
+import shutil
 
+from importlib.resources import (
+    files,
+    as_file
+)
 from typing import (
     Dict,
     List,
     Union,
 )
 from pathlib import Path
+
+# internal imports
+from .utils import *
 
 # defining custom types
 if sys.version_info >= (3, 10):
@@ -353,12 +358,17 @@ class Calibration(object):
         """Convert the object to a dictionary."""
         return self.__dict__
 
-    def to_json(self) -> str:
-        """Serialize the object to a JSON string."""
-        return json.dumps(self.__dict__)
-
-    def prepare(self, output_path: PathLike) -> None:
+    def prepare(
+        self,
+        output_path: PathLike = None) -> None:
         """Prepare the calibration and model objects."""
+        # by default, set the output path to `self.calibration_config.instance_path`
+        # if not provided, check the input to this function
+        if output_path is None:
+            output_path = self.calibration_config.get('instance_path')
+        else:
+            output_path = output_path
+
         # 1. model part
         self.model.analyze()
         self.model.prepare()
@@ -378,12 +388,15 @@ class Calibration(object):
         ))
 
         # 4. evaluation part
-        
+        self._eval()
+
+        # 5. summarize FIAT inputs
+        self._summarize_fiat_inputs(output_path=output_path)
+
         return
 
-    def eval(
+    def _eval(
         self,
-        instance_path: PathLike
     ) -> None:
         """Evaluate the model instance using the calibration software.
         This function is created to iteratively call model instances
@@ -396,48 +409,106 @@ class Calibration(object):
                 import meshflow as mf
             case _:
                 raise ValueError(f"Unsupported model software: {self.model_software}")
-            
-        # 
+
+        # Making a dictionary of only necessary information during the evaluation
+        # process for both calibration and model objects
+        eval_dict = {
+            'fiat_instance_path': self.calibration_config.get('instance_path'),
+            # because the `eval.py` script will eventually be saved under
+            # `<fiat_cache_path>/cpu_<n>/etc/evaluation/`, the model instance
+            # path is set to:
+            #     <fiat_cache_path>/cpu_<n>/model/
+            #         or with the relative path:
+            #     ../../model/
+            # This path is agnostic to the calibration software being used. These
+            # files all must copy for each instance of model evaluation.
+            'model_instance_path': '../../model/',
+            'model_executable': self.model_config.get('executable'),
+            'dates': self.calibration_config.get('dates'),
+            'objective_functions': self.calibration_config.get('objective_functions'),
+            'results_path': 'results',
+            'output_files': [self.model.outputs],
+            'observations_file': os.path.join(
+                self.calibration_config.get('instance_path'),
+                'etc',
+                'observations',
+                'observations.nc'
+            ),
+            # based on the calibration_software.templating.py engines, the 
+            # `self.model.parameters.keys()` and `self.model.others.keys()`
+            # are templated under:
+            #     <fiat_instance_path>/etc/templates/<key>.json
+            #          Or with the relative path:
+            #     ../templates/<key>.json
+            # `parameters` need to be recreated in each iteration
+            'parameters': {
+                key: os.path.join('../templates', f'{key}.json')
+                         for key in self.model.parameters.keys()},
+            # `others` are static in each iteration but necessary to
+            # be read by the script
+            'others': {
+                key: os.path.join('../templates', f'{key}.json')
+                         for key in self.model.others.keys()}
+        }
+
+        # dumping the dictionary into a JSON file for the evaluation script
+        eval_path = os.path.join(
+            self.calibration_config.get('instance_path'),
+            'etc',
+            'eval',
+            'eval.json'
+        )
+        with open(eval_path, 'w') as f:
+            json.dump(eval_dict, f, indent=4)
+
+        # now also move the eval.py file
+        rq = files('fiatmodel.models.mesh').joinpath('eval.py')
+
+        with as_file(rq) as src_path:
+            shutil.copy2(src_path, os.path.join(eval_dict['fiat_instance_path'], 'etc', 'eval', 'eval.py'))
+
+        # destination path
+        dest_path = os.path.join(
+            self.calibration_config.get('instance_path'),
+            'etc',
+            'eval',
+            'eval.py'
+        )
+        shutil.copy(src_path, dest_path)
+
         return
 
-# "private" global helper functions
-def _union_sorted_times(all_times: List[pd.DatetimeIndex]) -> pd.DatetimeIndex:
-    if not all_times:
-        return pd.DatetimeIndex([])
-    out = all_times[0]
-    for t in all_times[1:]:
-        out = out.union(t)
-    return out.sort_values()
+    def _summarize_fiat_inputs(
+        self,
+        output_path: PathLike = None,
+    ) -> None:
+        """Summarize all FIAT inputs into a single JSON file for
+        record-keeping purposes.
 
+        Parameters
+        ----------
+        output_path : PathLike
+            The path where the summary JSON file will be saved.
+        Returns
+        -------
+        None
+        """
+        summary_dict = {
+            'calibration_software': self.calibration_software,
+            'model_software': self.model_software,
+            'calibration_config': self.calibration_config,
+            'model_config': self.model_config,
+            'observations': self._obs,
+        }
 
-def _parse_numeric_string(s: str):
-    """
-    Try to interpret a numeric-looking string as int or float.
-    Return the converted number, or the original string if not numeric.
-    """
-    if _INT_RE.match(s):
-        # Keep as int if it fits typical Python int (Python int is unbounded anyway)
-        return int(s)
-    if _FLOAT_RE.match(s):
-        # Anything with decimal point or exponent
-        return float(s)
-    return s  # not numeric-looking
+        if output_path is None:
+            output_path = self.calibration_config.get('instance_path')
 
-def _convert_numeric_strings(obj):
-    """
-    Recursively walk lists/dicts and convert numeric-like strings.
-    """
-    if isinstance(obj, dict):
-        return {k: _convert_numeric_strings(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_convert_numeric_strings(v) for v in obj]
-    if isinstance(obj, str):
-        return _parse_numeric_string(obj.strip())
-    return obj  # leaves int, float, bool, None, etc. untouched
+        summary_path = os.path.join(
+            output_path,
+            'fiat_instance.json',
+        )
+        with open(summary_path, 'w') as f:
+            json.dump(summary_dict, f, indent=4)
 
-def _make_object_hook():
-    def object_hook(d):
-        for k, v in d.items():
-            d[k] = _convert_numeric_strings(v)  # reuse earlier function
-        return d
-    return object_hook
+        return
