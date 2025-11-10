@@ -38,7 +38,7 @@ echo "rank,counter,objective_category" > "${target}/log_${time_stamp}.csv"
 echo "${rank},${counter},${objective_category}" >> "${target}/log_${time_stamp}.csv"
 
 # make a copy of the *.ini files
-cp ./{{ model }}/*.ini "${target}"
+cp ./model/*.ini "${target}"
 
 # make a copy of the *.txt files
-cp ./{{ model }}/*.txt "${target}"
+cp ./model/*.txt "${target}"

@@ -13,7 +13,6 @@ import json
 import sys
 import os
 import re
-import inspect
 import shutil
 
 from importlib.resources import (
@@ -212,6 +211,26 @@ class Calibration(object):
         # by default, enable converting units
         convert_units: bool = True
 
+        # if the `observation` is a netcdf file path, read it directly
+        if isinstance(self._obs, PathLike):
+            # make sure it is a `Path` object
+            self._obs = Path(self._obs)
+            # extract the suffix
+            if self._obs.suffix in ['.nc', '.nc4']:
+                dsq = xr.open_dataset(self._obs).pint.quantify(unit_registry=ureg)
+                # extract the frequency information from the time coordinate
+                # if not provided already as variable
+                if "freq" not in dsq.variables:
+                    time_index = pd.DatetimeIndex(dsq["time"].values)
+                    inferred_freq = pd.infer_freq(time_index)
+                    if inferred_freq is not None:
+                        dsq["freq"] = inferred_freq
+            else:
+                raise ValueError(
+                    f"Unsupported observation file format: {self._obs.suffix}"
+                )
+            return dsq
+
         entries = list(self._obs)
 
         # Collect per-entry parsed series and metadata
@@ -221,11 +240,12 @@ class Calibration(object):
 
         for e in entries:
             ts = e.get("timeseries", [])
-            if not ts:
+            if len(ts) == 0:
                 idx = pd.DatetimeIndex([])
                 vals = np.array([], dtype=float)
             elif isinstance(ts, pd.Series):
-                pass # do nothing
+                idx = pd.to_datetime(ts.index)
+                vals = ts.to_numpy(dtype=float)
             else:
                 t, v = zip(*ts)
                 idx = pd.to_datetime(list(t))
@@ -246,7 +266,7 @@ class Calibration(object):
             )
 
         # Global coordinates
-        global_time = _union_sorted_times(per_entry_time_index)
+        global_time = union_sorted_times(per_entry_time_index)
 
         # Unique computational_unit ids in first-seen order
         seen_ids: List[int] = []
@@ -378,14 +398,16 @@ class Calibration(object):
         self.calibration.generate_parameter_templates(output_path=output_path)
         self.calibration.generate_etc_templates(output_path=output_path)
         self.calibration.generate_model_templates(output_path=output_path)
+        self.calibration.generate_obs_templates(output_path=output_path)
 
         # 3. observation part
-        self.observations.to_netcdf(os.path.join(
-            output_path,
-            'etc',
-            'observations',
-            'observations.nc'
-        ))
+        self.observations.to_netcdf(
+            os.path.join(
+                output_path,
+                'observations',
+                'observations.nc'
+            )
+        )
 
         # 4. evaluation part
         self._eval()
@@ -422,7 +444,7 @@ class Calibration(object):
             #     ../../model/
             # This path is agnostic to the calibration software being used. These
             # files all must copy for each instance of model evaluation.
-            'model_instance_path': '../../model/',
+            'model_instance_path': './model/',
             'model_executable': self.model_config.get('executable'),
             'dates': self.calibration_config.get('dates'),
             'objective_functions': self.calibration_config.get('objective_functions'),
@@ -430,7 +452,6 @@ class Calibration(object):
             'output_files': [self.model.outputs],
             'observations_file': os.path.join(
                 self.calibration_config.get('instance_path'),
-                'etc',
                 'observations',
                 'observations.nc'
             ),
@@ -441,11 +462,12 @@ class Calibration(object):
             #          Or with the relative path:
             #     ../templates/<key>.json
             # `parameters` need to be recreated in each iteration
+            #  USING `EVAL` PATH
             'parameters': {
-                key: os.path.join('../templates', f'{key}.json')
+                key: os.path.join('../eval', f'{key}.json')
                          for key in self.model.parameters.keys()},
             # `others` are static in each iteration but necessary to
-            # be read by the script
+            # be read by the script---USING `TEMPLATES` PATH
             'others': {
                 key: os.path.join('../templates', f'{key}.json')
                          for key in self.model.others.keys()}
@@ -500,6 +522,23 @@ class Calibration(object):
             'model_config': self.model_config,
             'observations': self._obs,
         }
+
+        # check whether the `timeseries` keys in `observations` need to be
+        # summarized or not
+        for obs in summary_dict['observations']:
+            if 'timeseries' in obs:
+                ts = obs['timeseries']
+                if isinstance(ts, pd.Series):
+                    # convert to list of tuples
+                    obs['timeseries'] = list(zip(
+                        ts.index.astype(str).to_list(),
+                        ts.to_numpy(dtype=float).tolist()
+                    ))
+                else:
+                    # make sure all values are converted to float
+                    obs['timeseries'] = list(
+                        (str(t), float(v)) for t, v in ts
+                    )
 
         if output_path is None:
             output_path = self.calibration_config.get('instance_path')

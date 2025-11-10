@@ -187,6 +187,15 @@ class OptimizerTemplateEngine(object):
         """
         raise NotImplementedError("This method should be implemented by subclasses.")
 
+    def generate_obs_templates(
+        self,
+        output_path: PathLike,
+    ) -> None:
+        """
+        Generate observation files required by the calibration software.
+        """
+        raise NotImplementedError("This method should be implemented by subclasses.")
+
     def _create_dir(self, path: PathLike) -> None:
         """Create directory if it does not exist."""
         # if `path` exists, give a warning and create the path nonetheless

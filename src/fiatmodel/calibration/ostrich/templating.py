@@ -175,7 +175,7 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         self._create_dir(etc_path)
 
         # creating `scripts` and `eval` directories within `etc`
-        other_dirs = ['scripts', 'eval', 'observations', 'templates']
+        other_dirs = ['scripts', 'eval', 'templates']
         for other_dir in other_dirs:
             self._create_dir(os.path.join(etc_path, other_dir))
 
@@ -185,6 +185,8 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
             'scripts',
             'archive.sh',
         )
+        # make sure the script is executable
+        os.chmod(archive_script_path, 0o755)
 
         archive_content = self.archive_template.render(
             model=self.model.model_software.lower())
@@ -250,5 +252,30 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
                 os.path.join(model_output_path, dir),
                 dirs_exist_ok=True,
             )
+
+        return
+
+    def generate_obs_templates(
+        self,
+        output_path: PathLike,
+    ) -> None:
+        """
+        Generate observation files needed for calibration.
+
+        Parameters
+        ----------
+        output_path : PathLike
+            The path where the generated observation file will be saved.
+        
+        Returns
+        -------
+        None
+        """
+        # create the `etc/observations/` directory
+        obs_path = os.path.join(
+            output_path,
+            'observations',
+        )
+        self._create_dir(obs_path)
 
         return

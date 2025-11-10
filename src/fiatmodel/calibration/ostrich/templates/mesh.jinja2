@@ -53,7 +53,7 @@
 #}
 # Essential variables
 ProgramType         {{ algorithm }}
-ModelExecutable     ./etc/scripts/eval.py
+ModelExecutable     ./etc/eval/eval.py
 ModelSubdir         cpu_
 ObjectiveFunction   GCOP
 
@@ -94,7 +94,7 @@ BeginResponseVars
     {# Now itearte over the elements of the cost function and see how many are available #}
       {% for of in objective_functions.get(flux).get(metric) %}
         {% set idx = loop.index %}
-  {{ flux }}_{{ metric }}_{{ idx }}     ./etc/evaluation/{{ flux }}_{{ metric }}_{{ idx }}.csv ;             OST_NULL     0      1     ','
+  {{ flux }}_{{ metric }}_{{ idx }}     ./etc/eval/{{ flux }}_{{ metric }}_{{ idx }}.csv ;             OST_NULL     0      1     ','
       {% endfor %}
     {% endfor %}
   {% endfor %}
@@ -134,7 +134,7 @@ EndGCOP
 BeginFilePairs
   # template file; output file
   {% for file in parameters %}
-  ./etc/templates/{{ file }}.json; ./etc/evaluation/{{ file }}.json
+  ./etc/templates/{{ file }}.json; ./etc/eval/{{ file }}.json
   {% endfor %}
 EndFilePairs
 {% endif %}
@@ -167,7 +167,7 @@ BeginParams
           {# If so, we need to replace them with 'SLT' because of OSTRICH's
             limitations in dealing with constraints #}
           {% if 'CLAY' in param_name %}
-            {% set param_name = param_name | replace('CLAY', 'CLY') %}
+            {% set param_name = param_name | replace('CLAY', 'CLY') ~ '_'%}
             {% set silt_name = param_name | replace('CLY', 'SLT') %}
               {% if silt_name not in silt.included %}
                 {# Adding a silt parameter with fixed value of 0.0, min of 0.0, and max of 50.0 #}
@@ -175,7 +175,7 @@ BeginParams
     {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
               {% endif %}
           {% elif 'SAND' in param_name %}
-            {% set param_name = param_name | replace('SAND', 'SND') %}
+            {% set param_name = param_name | replace('SAND', 'SND') ~ '_' %}
             {% set silt_name = param_name | replace('SND', 'SLT') %}
             {% if silt_name not in silt.included %}
               {% set _ = silt.included.append(silt_name) %}
