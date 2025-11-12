@@ -237,7 +237,7 @@ def parse_class_veg2(
     veg_lines = veg_section.splitlines()
     
     if len(veg_lines) != 3:
-        raise ValueError("The vegetation section must have exactly 4 lines.")
+        raise ValueError("The vegetation section must have exactly 3 lines.")
 
     # gru index is the 1-based index of the GRU type
     # so the index of the first column is gru_idx - 1
@@ -251,13 +251,13 @@ def parse_class_veg2(
         veg_params = {
             # first-line parameters of the block
             'rsmn': float(veg_lines[0].strip().split()[idx]),
-            'qa50': float(veg_lines[0].strip().split()[idx + 5]),
+            'qa50': float(veg_lines[0].strip().split()[idx + 4]),
             # second-line parameters
             'vpda': float(veg_lines[1].strip().split()[idx]),
-            'vpdb': float(veg_lines[1].strip().split()[idx + 5]),
+            'vpdb': float(veg_lines[1].strip().split()[idx + 4]),
             # third-line parameters
             'psga': float(veg_lines[2].strip().split()[idx]),
-            'psgb': float(veg_lines[2].strip().split()[idx + 5]),
+            'psgb': float(veg_lines[2].strip().split()[idx + 4]),
         }
 
     elif gru_idx == 5:

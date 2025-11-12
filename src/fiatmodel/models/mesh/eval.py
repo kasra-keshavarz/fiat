@@ -25,10 +25,13 @@ import HydroErr
 
 # default environment
 my_env = os.environ.copy()
-print(os.getcwd())
 
 # MESH-specific import
 import meshflow as mf
+
+# defaults
+with open(os.path.join('./etc/eval/defaults.json'), 'r') as f:
+    DEFAULTS = json.load(f)
 
 # Precompile regexes for speed/readability
 _INT_RE = re.compile(r'^[-+]?\d+$')
@@ -80,6 +83,84 @@ def _make_object_hook():
 def _reset_dir(path: str) -> None:
     shutil.rmtree(path, ignore_errors=True)  # delete the directory entirely
     os.makedirs(path, exist_ok=True)         # recreate it empty
+
+def infer_frequency(time_index: pd.DatetimeIndex):
+    # Try explicit or inferred freq
+    if time_index.freq is not None:
+        return time_index.freq
+    if time_index.inferred_freq is not None:
+        return pd.tseries.frequencies.to_offset(time_index.inferred_freq)
+    # Fallback: choose most common delta
+    if len(time_index) < 2:
+        raise ValueError("Cannot infer frequency from fewer than 2 timestamps.")
+    deltas = pd.Series(time_index[1:] - time_index[:-1])
+    # mode() can return multiple; take the first
+    step = deltas.mode().iloc[0]
+    return pd.tseries.frequencies.to_offset(step)
+
+def build_calibration_subset(ds: xr.Dataset, dates: dict) -> xr.Dataset:
+    """
+    Reindex ds to cover all [start, end] intervals in eval_config['dates'],
+    padding outside ds.time with NaNs.
+    """
+    # Extract intervals
+    starts = pd.to_datetime([d['start'] for d in dates])
+    ends   = pd.to_datetime([d['end'] for d in dates])
+    
+    if len(starts) != len(ends):
+        raise ValueError("Starts and ends length mismatch.")
+
+    # Get underlying pandas index (assumes standard datetime)
+    try:
+        time_index = ds.indexes['time']
+    except KeyError:
+        raise KeyError("Dataset has no 'time' coordinate index.")
+
+    # Infer frequency
+    freq = infer_frequency(time_index)
+
+    # Build union of all desired times
+    union_index = None
+    for s, e in zip(starts, ends):
+        if e < s:
+            raise ValueError(f"End before start for interval {s} - {e}")
+        rng = pd.date_range(s, e, freq=freq)
+        union_index = rng if union_index is None else union_index.union(rng)
+
+    # Report expansion intent
+    orig_min, orig_max = time_index.min(), time_index.max()
+    requested_min, requested_max = union_index.min(), union_index.max()
+    if requested_min < orig_min or requested_max > orig_max:
+        raise KeyError("Requested calibration range beyond simulation time-series")
+
+    # Reindex (no fill method => NaNs)
+    out = ds.reindex(time=union_index)
+    return out
+
+def resample_per_variable(ds, rule="1D", dim="time", methods=None, default=None, **kwargs):
+    """
+    methods: dict var -> reducer (string like 'mean'/'sum' or a callable)
+    default: reducer for variables not in methods; if None, they’re skipped
+    kwargs:  passed to the reducer (e.g., skipna=True, keep_attrs=True)
+    """
+    if methods is None:
+        raise ValueError("Provide methods, e.g. {'QO': 'sum', 'QI': 'mean'}")
+
+    out = {}
+    for var in ds.data_vars:
+        reducer = methods.get(var, default)
+        if reducer is None:
+            continue
+        resampler = ds[var].resample({dim: rule})
+        if isinstance(reducer, str):
+            if not hasattr(resampler, reducer):
+                raise ValueError(f"Reducer '{reducer}' not available for '{var}'")
+            out[var] = getattr(resampler, reducer)(**kwargs)
+        elif callable(reducer):
+            out[var] = resampler.reduce(reducer, **kwargs)
+        else:
+            raise TypeError(f"Reducer for '{var}' must be a string or callable")
+    return xr.Dataset(out)
 
 if __name__ == "__main__":
     # read the `json` configuration file
@@ -143,43 +224,44 @@ if __name__ == "__main__":
             cwd=eval_config['model_instance_path'],
             check=True,
             env=my_env)
-    
+
         # first read the time-series of obs/sim for
         #      each element in the `obs` file
-        simulations = xr.open_mfdataset(
+        simulations = xr.open_dataset(
             os.path.join(
                 eval_config['model_instance_path'],
                 eval_config['results_path'],
-                f) for f in eval_config['output_files']
-            )
-        
-        # selected calibration dates
-        simulations = simulations.sel(
-            time=slice(
-                eval_config['dates']['start_date'],
-                eval_config['dates']['end_date']
-            )
-        )
-        observations = observations.sel(
-            time=slice(
-                eval_config['dates']['start_date'],
-                eval_config['dates']['end_date']
+                eval_config['output_files'][0][0]
             )
         )
 
-        # make sure all the time-steps in the simulations
-        # are available in the observations, and assign NaN for
-        # the missing time-steps
-        simulations = observations.reindex(
-            time=observations['time'],
-            fill_values=np.nan
+        # as a sanity check, make sure both `subbasin` and `time`
+        # dimensions are available in both datasets
+        for dim in ['subbasin', 'time']:
+            if dim not in simulations.dims:
+                raise ValueError(
+                    f'Dimension `{dim}` not found in simulation results.'
+                )
+            if dim not in observations.dims:
+                raise ValueError(
+                    f'Dimension `{dim}` not found in observation data.'
+                )
+
+        # selected calibration dates
+        sim_sub = build_calibration_subset(
+            simulations,
+            eval_config.get('dates')
+        )
+        obs_sub = build_calibration_subset(
+            observations,
+            eval_config.get('dates')
         )
 
         # based on the observation file, understand the time-step
         # interval of the observations
-        obs_ts = observations['freq'].unique().to_numpy()[0]
+        obs_ts = str(np.unique(obs_sub['freq'].values)[0])
         # and extract the simulation time-step accordingly
-        sim_ts = xr.infer_freq(simulations['time'])
+        sim_ts = xr.infer_freq(sim_sub['time'])
 
         # if the time-steps are different, perform resampling
         # FIXME: for now, the variables are averaged. As, the script is set to
@@ -187,15 +269,21 @@ if __name__ == "__main__":
         #        be fixed in the future releases.
         # resampling the time-series matching the observations time-step
         ts_interval = pd.tseries.frequencies.to_offset
-        if ts_interval(obs_ts) == ts_interval(sim_ts):
-            simulations = simulations.resample(time=obs_ts).mean()
-            #                                              ^^^^^^^ FIXME
+        # check the variable name in DEFAULTS and see if we should take the
+        # `mean` or `sum` during resampling
+        # Suppose ds has variables QO and QI and a time dimension
+        var = set(sim_sub.variables) - set(DEFAULTS.get('default_variables'))
+
+        if ts_interval(obs_ts) != ts_interval(sim_ts):
+            for v in var:
+                how = 'mean' if v in DEFAULTS['output_variables']['mean'] else 'sum'
+                sim_sub = resample_per_variable(sim_sub, rule=obs_ts, methods={"QO": "sum", "QI": "mean"},)
         else:
-            pass # time-steps are the same, no action needed
+            pass # just use obs_sub as is
 
         # extract names for the `observations` - can be hard-coded
-        station_ids = observations.subbasin.to_numpy().tolist()
-        station_names = observations.name.to_numpy().tolist()
+        station_ids = obs_sub.subbasin.to_numpy().tolist()
+        station_names = obs_sub.name.to_numpy().tolist()
 
         # evaluate each objective function
         of_values = {}
@@ -208,9 +296,9 @@ if __name__ == "__main__":
             # assign simulation results for the selected flux
             for st in station_ids:
                 # sims dictionary
-                sims[observations['name'].sel(subbasin=st).to_numpy().tolist()] = simulations[flux].sel(subbasin=st).to_series()
+                sims[obs_sub['name'].sel(subbasin=st).to_numpy().tolist()] = sim_sub[flux].sel(subbasin=st).to_series()
                 # same for obs dictionary
-                obs[observations['name'].sel(subbasin=st).to_numpy().tolist()] = observations[flux].sel(subbasin=st).to_series()
+                obs[obs_sub['name'].sel(subbasin=st).to_numpy().tolist()] = obs_sub[flux].sel(subbasin=st).to_series()
             # metric (for example, kge_2012), and ofs (list of individual objective functions
             for metric, ofs in metrics.items():
                 # add elements to `of_values`
@@ -235,9 +323,34 @@ if __name__ == "__main__":
                         'w',
                     ) as f:
                         f.write(f'{result}')
+
     except subprocess.CalledProcessError as e:
         warnings.warn(
             f'MODEL EXECUTION FAILED WITH ERROR CODE {e.returncode}. '
+            'OBJECTIVE FUNCTION VALUES WILL BE SET TO A LARGE NUMBER.'
+        )
+        for flux, metrics in eval_config.get('objective_functions').items():
+            for metric, ofs in metrics.items():
+                for idx, of in enumerate(ofs, start=1): # a list of objective functions
+                    # FIXME: Only coding for OSTRICH now, since Ostrich is always
+                    #        dealing with a minimization problem, reporting a large
+                    #        value for failed runs.
+                    result = +1e10
+
+                    # write the of results to a .csv file (with only a single element)
+                    with open(
+                        os.path.join(
+                            './etc',
+                            'eval',
+                            f'{flux.upper()}_{metric}_{idx}.csv',
+                        ),
+                        'w',
+                    ) as f:
+                        f.write(f'{result}')
+
+    except (ValueError, TypeError, KeyError) as e:
+        warnings.warn(
+            f'MODEL OUTPUT CORRUPTED: {str(e)}. '
             'OBJECTIVE FUNCTION VALUES WILL BE SET TO A LARGE NUMBER.'
         )
         for flux, metrics in eval_config.get('objective_functions').items():

@@ -185,13 +185,14 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
             'scripts',
             'archive.sh',
         )
-        # make sure the script is executable
-        os.chmod(archive_script_path, 0o755)
 
         archive_content = self.archive_template.render(
             model=self.model.model_software.lower())
         with open(archive_script_path, 'w') as f:
             f.write(archive_content)
+
+        # make sure the script is executable
+        os.chmod(archive_script_path, 0o755)
 
         # if `others` attribute is populated (not an empty dictionary)
         if len(self.model.others) > 0:

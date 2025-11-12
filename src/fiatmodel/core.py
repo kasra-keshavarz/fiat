@@ -489,14 +489,11 @@ class Calibration(object):
         with as_file(rq) as src_path:
             shutil.copy2(src_path, os.path.join(eval_dict['fiat_instance_path'], 'etc', 'eval', 'eval.py'))
 
-        # destination path
-        dest_path = os.path.join(
-            self.calibration_config.get('instance_path'),
-            'etc',
-            'eval',
-            'eval.py'
-        )
-        shutil.copy(src_path, dest_path)
+        # also copy the defaults.json file
+        rq_defaults = files('fiatmodel.models.mesh').joinpath('defaults.json')
+
+        with as_file(rq_defaults) as src_defaults_path:
+            shutil.copy2(src_defaults_path, os.path.join(eval_dict['fiat_instance_path'], 'etc', 'eval', 'defaults.json'))
 
         return
 
