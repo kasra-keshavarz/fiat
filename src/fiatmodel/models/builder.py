@@ -31,6 +31,7 @@ class ModelBuilder(object):
         calibration_software: str,
         model_software: str,
         fluxes: Sequence[str] = [],
+        dates: Dict[str, Sequence[str]] = None,
     ) -> None:
          # store the configuration dictionary
         if not isinstance(config, dict):
@@ -75,6 +76,17 @@ class ModelBuilder(object):
         # fluxes for outputing
         self.fluxes = fluxes
         self.outputs = []  # to be populated later by child classes
+
+        # dates must be provided, otherwise, warn the user
+        if dates is None:
+            warnings.warn(
+                "`dates` not provided. Calibration iterations will not be accurate.",
+                UserWarning
+            )
+        else:
+            if not isinstance(dates, Sequence):
+                raise TypeError('`dates` must be a dictionary')
+            self.dates = dates
 
         return
 

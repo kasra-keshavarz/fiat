@@ -3,14 +3,24 @@ from typing import (
     Dict,
     Union,
     List,
+    Tuple,
 )
 from pathlib import Path
 
 import re
 import os
+import sys
 
 # NameType type alias for parameter names
 NameType = Union[str, int, float]
+
+# custom types
+# PathLike type alias for file system paths
+if sys.version_info >= (3, 10):
+    from typing import TypeAlias
+    PathLike: TypeAlias = Union[str, Path]
+else:
+    PathLike = Union[str, Path]
 
 def remove_comments(
     string
@@ -482,3 +492,41 @@ def param_name_gen(
     param_name = '_' + _unit.upper() + _name.upper()
     
     return param_name
+
+def replace_prefix_in_last_two_lines(
+    path: PathLike,
+    replacements: Tuple[str],
+    width: int = 17):
+    """
+    Replace the first `width` characters of the last two lines of `path`
+    with `replacement` (padded/truncated to exactly `width`).
+    """
+    p = Path(path)
+    lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
+    if len(lines) < 2:
+        raise ValueError("File has fewer than two lines.")
+
+    # Prepare replacement to exactly `width` characters
+    for idx, r in enumerate(replacements):
+        rep = (r[:width]).ljust(width)
+
+        line = lines[idx-2]
+        # Preserve newline if present
+        newline = "\n" if line.endswith("\n") else ""
+        body = line[:-1] if newline else line
+        lines[idx-2] = rep + body[width:] + newline
+
+    p.write_text("".join(lines), encoding="utf-8")
+
+    return
+
+def spaces(h: int) -> str:
+    """Return a string of `h` spaces
+    """
+    # if h is only one digit, return 3 spaces
+    if h < 10:
+        return " " * 3
+    elif 10 < h < 25:
+        return " " * 2
+    
+    return

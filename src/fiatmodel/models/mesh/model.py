@@ -13,8 +13,11 @@ from typing import (
     Union,
     List,
 )
+
 from pathlib import Path
 from io import StringIO
+from dateutil import parser
+from datetime import datetime
 
 # internal imports
 from ..builder import ModelBuilder
@@ -38,6 +41,7 @@ class MESH(ModelBuilder):
         config: Dict,
         calibration_software: Dict,
         fluxes: Sequence[str] = [],
+        dates: Sequence[Dict[str, str]] = None,
     ) -> None:
         # build the parent class
         super().__init__(
@@ -45,6 +49,7 @@ class MESH(ModelBuilder):
             calibration_software,
             model_software='mesh',
             fluxes=fluxes,
+            dates=dates,
         )
 
         # build MESH-sepcific required files
@@ -63,6 +68,8 @@ class MESH(ModelBuilder):
         self.required_dirs = [
             'results',
         ]
+        # time-stamp string for backups
+        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     def sanity_check(self) -> bool:
         """Perform sanity checks on the configured MESH instance.
@@ -125,7 +132,7 @@ class MESH(ModelBuilder):
                             self.forcing_file = [os.path.abspath(forcing_file_path)]
 
                             # before making changes, back up the original run options file
-                            backup_path = run_options_path + '.bak'
+                            backup_path = run_options_path + f'.bak_{self.timestamp }'
                             shutil.copy(run_options_path, backup_path) # no need to preserve metadata
 
                             # if `fname` is matched, we need to update that entry to be absolute path using `fpath`
@@ -166,7 +173,7 @@ class MESH(ModelBuilder):
                             # before making changes, back up the original forcing file list
                             backup_path = os.path.join(
                                 self.config['instance_path'],
-                                forcing_file_list + '.bak'
+                                forcing_file_list + f'.bak_{self.timestamp }'
                             )
                             shutil.copy(
                                 os.path.join(self.config['instance_path'], forcing_file_list),
@@ -197,7 +204,7 @@ class MESH(ModelBuilder):
         outputs_balance_path = os.path.join(
             self.config['instance_path'], 'outputs_balance.txt'
         )
-        backup_outputs_balance_path = outputs_balance_path + '.bak'
+        backup_outputs_balance_path = outputs_balance_path + f'.bak_{self.timestamp }'
         shutil.copy(outputs_balance_path, backup_outputs_balance_path) # no need to preserve metadata
 
         # create a new one and only print the fluxes that are
@@ -205,13 +212,58 @@ class MESH(ModelBuilder):
         with open(outputs_balance_path, 'w', encoding="utf-8") as fout:
             fout.write(
                 "!MESH Outputs Balance File generate by FIAT\n"
-                "!Only the necessary fluxes for calibration are included here.\n"
-                "!Format: flux_name  output_frequency nc\n"
+                "!Only the necessary output variables for calibration are included here.\n"
+                "!Format: variable_name  output_frequency nc\n"
             )
             # hard-coded necessary fluxes for MESH calibration
             necessary_fluxes = self.fluxes
             for flux_name in necessary_fluxes:
                 fout.write(f"{flux_name.upper()}     {self.forcing_freq.upper()}   nc\n")
+
+        # adjust the model executation dates, if provided
+        if self.dates: # keys are `start` and `end`
+            # calculate the julian dates of start and end dates
+            earliest = min(parser.parse(d['start']) for d in self.dates)
+            latest = max(parser.parse(d['end']) for d in self.dates)
+
+            # calculate the year, day_of_year, hour, minute
+            # for both the `earliest` and `latest` dates
+            earliest_comps = (
+                earliest.timetuple().tm_year,
+                earliest.timetuple().tm_yday,
+                earliest.timetuple().tm_hour,
+                earliest.timetuple().tm_min,
+            )
+            latest_comps = (
+                latest.timetuple().tm_year,
+                latest.timetuple().tm_yday,
+                latest.timetuple().tm_hour,
+                latest.timetuple().tm_min,
+            )
+
+            # make MESH-compliant date strings
+            start_str = str(earliest_comps[0]) + \
+                " " + \
+                f"{earliest_comps[1]:03d}" + \
+                spaces(earliest_comps[2]) + \
+                str(earliest_comps[2]) + \
+                spaces(earliest_comps[3]) + \
+                str(earliest_comps[3])
+
+            end_str = str(latest_comps[0]) + \
+                " " + \
+                f"{latest_comps[1]:03d}" + \
+                spaces(latest_comps[2]) + \
+                str(latest_comps[2]) + \
+                spaces(latest_comps[3]) + \
+                str(latest_comps[3])
+
+            # read the original run options file and back it up
+            replace_prefix_in_last_two_lines(
+                path=run_options_path,
+                replacements=(start_str, end_str),
+                width=17,
+            )
 
         # if we reach here, all checks passed, so return True
         return True
