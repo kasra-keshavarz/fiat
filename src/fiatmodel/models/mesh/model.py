@@ -13,11 +13,14 @@ from typing import (
     Union,
     List,
 )
+from datetime import (
+    datetime,
+    timedelta,
+)
 
 from pathlib import Path
 from io import StringIO
 from dateutil import parser
-from datetime import datetime
 
 # internal imports
 from ..builder import ModelBuilder
@@ -117,7 +120,8 @@ class MESH(ModelBuilder):
                 for pattern_name, pattern in patterns_list:
                     m = pattern.search(line)
                     if m:
-                        if pattern_name in ['fname', 'fpath']:
+                        # if fname= is provided
+                        if pattern_name == 'fname':
                             forcing_file = m.group(1).rstrip('\r\n')
                             # assign self.forcing_file to the full path
                             forcing_file_path = os.path.join(
@@ -149,6 +153,45 @@ class MESH(ModelBuilder):
                                     else:
                                         fout.write(line)
 
+                        # if fpath= is provided
+                        elif pattern_name == 'fpath':
+                            forcing_file = m.group(1).rstrip('\r\n')
+
+                            # make sure it's an absolute path
+                            if not os.path.isabs(forcing_file):
+                                forcing_file_path = os.path.join(
+                                    self.config['instance_path'], forcing_file,
+                                )
+                            else:
+                                forcing_file_path = forcing_file
+
+                            if not os.path.isfile(forcing_file_path):
+                                raise FileNotFoundError(
+                                    f"The forcing file {forcing_file} specified in "
+                                    f"{run_options_path} is not found."
+                                )
+                            # turning into absolute path and assign to self.forcing_file
+                            self.forcing_file = [os.path.abspath(forcing_file_path)]
+
+                            # before making changes, back up the original run options file
+                            backup_path = run_options_path + f'.bak_{self.timestamp }'
+                            shutil.copy(run_options_path, backup_path) # no need to preserve metadata
+
+                            # if `fname` is matched, we need to update that entry to be absolute path using `fpath`
+                            # read the original file and replace the entry
+                            with open(backup_path, 'r', encoding="utf-8") as fin, open(run_options_path, 'w', encoding="utf-8") as fout:
+                                for line in fin:
+                                    if pattern.search(line):
+                                        m = pattern.search(line)
+                                        start, end = m.span()
+                                        new_line = line[:start] + f"fpath={self.forcing_file[0]}" + line[end:]
+                                        if not new_line.endswith('\n'):
+                                            new_line += '\n'
+                                        fout.write(new_line)
+                                    else:
+                                        fout.write(line)
+
+                        # if FORCINGFILESLIST option is provided
                         elif pattern_name == 'FORCINGFILESLIST':
                             forcing_file_list = m.group(1).rstrip('\r\n')
                             # read the forcing file list and check if all files exist
@@ -225,6 +268,11 @@ class MESH(ModelBuilder):
             # calculate the julian dates of start and end dates
             earliest = min(parser.parse(d['start']) for d in self.dates)
             latest = max(parser.parse(d['end']) for d in self.dates)
+            # subtracting (from earliest) and adding (to latest)
+            # one time step to ensure the model runs for the full
+            # duration specified by the user
+            earliest = pd.Timestamp(earliest) - pd.tseries.frequencies.to_offset(self.forcing_freq)
+            latest = pd.Timestamp(latest) + pd.tseries.frequencies.to_offset(self.forcing_freq)
 
             # calculate the year, day_of_year, hour, minute
             # for both the `earliest` and `latest` dates
