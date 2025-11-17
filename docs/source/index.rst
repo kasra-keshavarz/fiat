@@ -29,6 +29,6 @@ and FIAT aims to reduce the burden of setting up these calibration experiments.
    :caption: Contents:
 
    configuration
-   example
+   examples
    api
 
