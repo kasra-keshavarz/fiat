@@ -323,4 +323,3 @@ Below is the minimal structure you should provide (values are illustrative):
 
 Refer to the :doc:`examples` page for a complete, runnable setup derived from
 the repository Notebook.
-
