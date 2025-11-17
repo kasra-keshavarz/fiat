@@ -59,7 +59,64 @@ MYENV = os.environ.copy()
 
 
 class Calibration(object):
-    """Main Calibration class of FIAT package.
+    """Calibration workflow orchestrator for FIAT.
+
+    Coordinates the calibration engine and the hydrologic model, manages
+    observations, prepares run directories, and generates evaluation assets.
+
+    Notes
+    -----
+    - The class builds model- and calibration-specific helper objects based on
+      the provided `model_software` and `calibration_software` names.
+    - Supported values are currently `"mesh"` for the model and `"ostrich"`
+      for the calibration engine.
+    - Users are encouraged to add new model and calibration software recipes
+      by extending available workflows.
+
+    Attributes
+    ----------
+    calibration_software : str
+        Selected calibration engine name (e.g., ``"ostrich"``).
+    model_software : str
+        Selected model name (e.g., ``"mesh"``).
+    calibration_config : dict or None
+        Configuration dictionary used by the calibration engine.
+    model_config : dict or None
+        Configuration dictionary used by the model.
+    model : object
+        Model adapter instance constructed from ``model_software`` (e.g.,
+        ``fiatmodel.models.mesh.MESH``).
+    calibration : object
+        Calibration engine instance constructed from ``calibration_software``
+        (e.g., ``fiatmodel.calibration.OstrichTemplateEngine``).
+    observations : xarray.Dataset
+        Property that builds and returns the observations dataset on access.
+    _obs : list of dict or pandas.Series or pathlib.Path or str
+        Raw observation definitions, a time series, or a path to a NetCDF
+        file provided by the user. Used internally by the ``observations``
+        property. (Private)
+
+    Methods
+    -------
+    from_json(json_path)
+        Construct an instance from a JSON configuration file.
+    from_dict(data)
+        Construct an instance from a dictionary of constructor arguments.
+    to_dict()
+        Return a shallow dictionary of instance attributes.
+    prepare(output_path=None)
+        Render templates, persist observations, and stage evaluation assets.
+    observations
+        Property returning the observations dataset; includes a setter to
+        update the raw observation inputs.
+    __repr__()
+        Debug representation string.
+    __str__()
+        Human-readable representation string.
+    _eval()
+        Internal: create per-iteration evaluation assets for the engine.
+    _summarize_fiat_inputs(output_path=None)
+        Internal: write a summary JSON capturing the full instance inputs.
     """
 
     def __init__(
@@ -70,40 +127,27 @@ class Calibration(object):
         model_config: Dict = None,
         observations: List[Dict] = None,
     ) -> None:
-        """
-        Initialize the Calibration class.
+        """Create a new `Calibration` controller.
 
         Parameters
         ----------
         calibration_software : str
-            The software used for calibration. Default is 'ostrich'.
+            Name of the calibration engine (e.g., ``"ostrich"``).
         model_software : str
-            The software used for the model. Default is 'mesh'.
-        observations : List[Dict]
-            Calibration timeseries to be used in model evaluation
-            iterations. Each dictionary in the list should contain
-            the following keys:
-            - 'type': The type of calibration data (e.g., 'QO' for
-              observed streamflow).
-            - 'location': A dictionary with 'latitude' and 'longitude'
-              keys specifying the location of the observation.
-            - 'timeseries': A list of tuples containing date-value pairs
-              for the calibration data.
-            - 'units': The units of the calibration data.
-            - 'freq': The frequency of the calibration data (e.g., '1D'
-              for daily data).
-        model_config : Dict
-            Configuration parameters for the model software.
-
-        Returns
-        -------
-        None
+            Name of the hydrologic model (e.g., ``"mesh"``).
+        calibration_config : dict, optional
+            Configuration for the calibration engine, including objective
+            functions and calibration time window.
+        model_config : dict, optional
+            Configuration for the model (e.g., executable path, I/O files).
+        observations : list of dict, optional
+            Observation definitions used for evaluation. See
+            the ``observations`` property for the expected schema.
 
         Notes
         -----
-        - The `observations` parameter must follow a specific structure
-          to properly load the data. An example is given in the docstring
-          of the `observations` property method.
+        The constructor immediately builds the model- and calibration-specific
+        helper objects based on the chosen software names.
         """
         # check data types
         if not isinstance(calibration_software, str):
@@ -152,18 +196,58 @@ class Calibration(object):
 
     @classmethod
     def from_json(cls, json_path: str):
+        """Instantiate from a JSON file.
+
+        Parameters
+        ----------
+        json_path : str
+            Path to a JSON file containing keyword arguments compatible with
+            the `Calibration` constructor.
+
+        Returns
+        -------
+        Calibration
+            A new instance populated from the JSON configuration.
+        """
         with open(json_path, 'r') as f:
             data = json.load(f)
         return cls(**data)
 
     @classmethod
     def from_dict(cls, data: dict):
+        """Instantiate from a dictionary of constructor arguments.
+
+        Parameters
+        ----------
+        data : dict
+            Dictionary of keyword arguments compatible with the `Calibration`
+            constructor.
+
+        Returns
+        -------
+        Calibration
+            A new instance populated from the provided dictionary.
+        """
         return cls(**data)
 
     def __repr__(self):
+        """Representation string for debugging.
+
+        Returns
+        -------
+        str
+            A concise constructor-like representation.
+        """
         return 'Calibration()'
 
     def __str__(self):
+        """Human-readable string representation.
+
+        Returns
+        -------
+        str
+            A concise description of the object.
+        """
         return 'Calibration()'
 
     @property
@@ -171,43 +255,95 @@ class Calibration(object):
         self,
     ) -> xr.Dataset:
         """
-        Load and process observational data based on
-        `self.observation_config` dictionary. The dictionary must
-        follow a specific structure to properly load the data.
-        An example is given in the following:
-        >>> [
-        ...     {
-        ...         'name': 'station_1',
-        ...         'type': 'QO',
-        ...         'timeseries': [
-        ...             ('2020-01-01', 10.5),
-        ...             ('2020-01-02', 12.3),
-        ...         ],
-        ...         'units': 'm3/s',
-        ...         'computational_unit': 'subbasin',
-        ...         'computational_unit_id': 14,
-        ...         'freq': '1D',
-        ...     },
-        ...     ...
-        ... ]
+        Load and process observational data into a quantified xarray.Dataset.
 
-        - `type` refers to the observational equivalence of the model output.
-           In this case, `QO` is a varibale name for routed streamflow output
-           from the MESH model.
-        - `location` is a dictionary containing the latitude and longitude
-           of the observation point.
-        - `timeseries` is an array-like object containing date-value pairs
-           for the observational data.
-        - `units` specifies the units of the observational data.
-        - `freq` specifies the frequency of the observational data. The 
+        This method consumes observational data provided either as:
+        1) a path to a NetCDF file (.nc or .nc4), or
+        2) a list of entry sequences describing time series per computational unit.
+
+        When provided a NetCDF file path, the dataset is opened and quantified using the
+        module's Pint unit registry. If a "freq" variable must be present to assure
+        the frequency information is interpretted properly. Due to natue of observational
+        data, missing timestamps are common, therefore, no inference of frequency
+        is performed and the user must provide it explicitly.
+
+        When provided a list of entries, time series are aligned onto the union of all
+        timestamps, values are converted to a consistent unit per variable "type" using
+        Pint, and the result is assembled into a Dataset with one variable per "type"
+        (e.g., "QO") and two primary coordinates: time and the model's computational
+        unit kind (e.g., "subbasin").
+
+        Expected entry schema (list of dict)
+        ------------------------------------
+        - name: str, optional
+            Human-readable station identifier.
+        - type: str, required
+            Observational variable key (e.g., "QO").
+        - timeseries: Sequence[tuple[date_like, float]] | pandas.Series, required
+            Time series as (date, value) pairs or a pandas Series with a DatetimeIndex.
+        - unit: str, required
+            Physical unit string compatible across entries of the same "type"
+            (e.g., "m3/s"). All entries of the same "type" are converted to a
+            common unit (the first encountered unit for that type).
+        - computational_unit: str, required
+            The model's computational unit kind (e.g., "subbasin"); must match a
+            NetCDF dimension name. At least one entry must provide this.
+        - computational_unit_id: int, required
+            Identifier of the computational unit. Multiple entries may share the
+            same identifier for different "type" values.
+        - freq: str, optional
+            Sampling frequency as a pandas offset alias (e.g., "1D", "1H").
+            See: https://pandas.pydata.org/pandas-docs/stable/user_guide/timeseries.html#dateoffset-objects
+        - Units: Values for a given "type" are converted to a unified unit using Pint.
+          Incompatible units will raise a Pint dimensionality error.
+
+        Examples
+        --------
+        From a list of entries::
+
+            obs = [
+                    "name": "station_1",
+                    "type": "QO",
+                    "timeseries": [("2020-01-01", 10.5), ("2020-01-02", 12.3)],
+                    "unit": "m3/s",
+                    "computational_unit": "subbasin",
+                    "computational_unit_id": 14,
+                    "freq": "1D",
+                },
+                    "name": "station_2",
+                    "type": "QO",
+                    "timeseries": pd.Series(
+                        data=[2.1, 2.2],
+                        index=pd.to_datetime(["2020-01-01", "2020-01-03"])
+                    ),
+                    "unit": "m3/s",
+                    "computational_unit": "subbasin",
+                    "computational_unit_id": 42,
+                    "freq": "1D",
+                },
+            model.observation_config = obs
+            dsq = model.observations()
+
+        Notes
+        -----
+        - ``type`` refers to the observational equivalence of the model output.
+           As an example, `QO` is a varibale name for routed streamflow output
+           from the MESH model, and in case it is used here, it indicates that the
+           observational data is streamflow data from the MESH model output.
+        - ``timeseries`` is an array-like object containing date-value pairs
+           for the observational data. It can also be provided as a pandas Series
+           object with datetime index and float values.
+        - ``freq`` specifies the frequency of the observational data. The 
            value follows the pandas frequency strings (e.g., '1D' for
-           daily, '1H' for hourly). For more details, refer to:
+           daily, '1h' for hourly). For more details, refer to:
            https://pandas.pydata.org/pandas-docs/stable/user_guide/timeseries.html#dateoffset-objects
 
         Returns
         -------
         xarray.Dataset
-            Processed observational data in a xarray.Dataset format.
+            Observations as an xarray dataset with time and computational
+            unit dimensions; variables carry units via the Pint accessor.
+
         """
         # by default, enable converting units
         convert_units: bool = True
@@ -370,19 +506,41 @@ class Calibration(object):
         return dsq
     @observations.setter
     def observations(self, value: List[Dict] | pd.Series) -> None:
+        """Set observational inputs.
+
+        Parameters
+        ----------
+        value : list of dict or pandas.Series
+            Observation definitions or a pre-built series that will be parsed
+            into an internal xarray dataset by the getter.
+        """
         if not isinstance(value, list | pd.Series):
             raise TypeError("`observations` must be a list of dictionaries or a pandas Series.")
         self._obs = value
         return
 
     def to_dict(self) -> dict:
-        """Convert the object to a dictionary."""
+        """Convert the object to a dictionary.
+
+        Returns
+        -------
+        dict
+            A shallow dictionary of instance attributes suitable for
+            serialization.
+        """
         return self.__dict__
 
     def prepare(
         self,
         output_path: PathLike = None) -> None:
-        """Prepare the calibration and model objects."""
+        """Render templates, write observations, and stage evaluation scripts.
+
+        Parameters
+        ----------
+        output_path : PathLike, optional
+            Destination directory for the instance. If omitted, the
+            ``instance_path`` from ``calibration_config`` is used.
+        """
         # by default, set the output path to `self.calibration_config.instance_path`
         # if not provided, check the input to this function
         if output_path is None:
@@ -421,9 +579,12 @@ class Calibration(object):
     def _eval(
         self,
     ) -> None:
-        """Evaluate the model instance using the calibration software.
-        This function is created to iteratively call model instances
-        during the calibration process.
+        """Create evaluation assets used by the calibration engine.
+
+        Notes
+        -----
+        Writes a compact ``eval.json`` alongside a templated ``eval.py`` and
+        ``defaults.json`` for use during each model evaluation iteration.
         """
         # import necessary model-specific workflow package for
         # evaluation needs
@@ -502,16 +663,13 @@ class Calibration(object):
         self,
         output_path: PathLike = None,
     ) -> None:
-        """Summarize all FIAT inputs into a single JSON file for
-        record-keeping purposes.
+        """Write a summary file capturing the full FIAT instance inputs.
 
         Parameters
         ----------
-        output_path : PathLike
-            The path where the summary JSON file will be saved.
-        Returns
-        -------
-        None
+        output_path : PathLike, optional
+            Directory where ``fiat_instance.json`` is written. Defaults to
+            ``calibration_config['instance_path']`` when not provided.
         """
         summary_dict = {
             'calibration_software': self.calibration_software,

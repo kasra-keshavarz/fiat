@@ -7,7 +7,7 @@ name = "fiatmodel"
 dynamic = ["version"]
 description = 'Framework for Iterative Assessment and Testing of Computer Models'
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = "GPL-3.0-or-later"
 keywords = []
 authors = [
@@ -25,16 +25,30 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-  "pint-xarray>=0.5.1",
+  "numpy>=1.22",
+  "pandas>=1.5",
+  "xarray>=2023.1.0",
   "pint>=0.24.4",
+  "pint-xarray>=0.5.1",
   "numexpr>=2.14.1",
+  "jinja2>=3.1",
+  "HydroErr>=1.24.1",
+  "meshflow",
   "dask>=2025.11.0",
+  "importlib-resources>=5; python_version < \"3.9\"",
+]
+
+[tool.hatch.build]
+include = [
+  "src/fiatmodel/**/*.py",
+  "src/fiatmodel/models/mesh/defaults.json",
+  "src/fiatmodel/calibration/ostrich/templates/**",
 ]
 
 [project.urls]
-Documentation = "https://github.com/kasra-keshavarz/fiatmodel#readme"
-Issues = "https://github.com/kasra-keshavarz/fiatmodel/issues"
-Source = "https://github.com/kasra-keshavarz/fiatmodel"
+Documentation = "https://github.com/kasra-keshavarz/fiat#readme"
+Issues = "https://github.com/kasra-keshavarz/fiat/issues"
+Source = "https://github.com/kasra-keshavarz/fiat"
 
 [tool.hatch.version]
 path = "src/fiatmodel/__about__.py"

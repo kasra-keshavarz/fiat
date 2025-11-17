@@ -1,21 +1,18 @@
-# fiat
+# Documentation
+The relevant documentation is located on [Readthedocs](https://fiatmodel.readthedocs.io).
 
-[![PyPI - Version](https://img.shields.io/pypi/v/fiat.svg)](https://pypi.org/project/fiat)
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/fiat.svg)](https://pypi.org/project/fiat)
+# License
+Copyright (c) 2025, FIAT developers
 
------
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-## Table of Contents
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
 
-- [Installation](#installation)
-- [License](#license)
-
-## Installation
-
-```console
-pip install fiat
-```
-
-## License
-
-`fiat` is distributed under the terms of the AGPLv3.0 or later license.
+You should have received a copy of the GNU General Public License
+along with this program. If not, see https://www.gnu.org/licenses/.

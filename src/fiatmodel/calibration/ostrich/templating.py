@@ -1,5 +1,17 @@
-"""
-Templating utilities for the "MESH" instantiations.
+"""Templating utilities for Ostrich workflows.
+
+Provides :class:`OstrichTemplateEngine`, a concrete implementation of
+``OptimizerTemplateEngine`` specialized for the hydrological models
+calibrated by the Ostrich optimization engine. It renders optimizer
+configuration, parameter templates, model inputs, and auxiliary assets
+required for evaluation.
+
+Notes
+-----
+- This engine expects model adapters to expose parameter metadata (e.g.,
+  ``templated_parameters``, ``parameter_bounds``, and
+  ``parameter_constraints``) and model instance paths.
+- Paths are treated as path-like objects (``str`` or :class:`pathlib.Path`).
 """
 # built-in imports
 import sys
@@ -31,18 +43,63 @@ else:
 JSON: TypeAlias = dict[str, "JSON"] | list["JSON"] | str | int | float | bool | None
 
 class OstrichTemplateEngine(OptimizerTemplateEngine):
-    """
-    A templating engine for generating configuration files
-    for the MESH model using the OSTRICH calibration software.
+    """Templating engine for MESH calibrated with Ostrich.
+
+    Subclass of :class:`~fiatmodel.calibration.optimizer.OptimizerTemplateEngine`
+    that renders all artifacts needed by the Ostrich backend to evaluate the
+    MESH model.
+
+    Attributes
+    ----------
+    template : object
+        Compiled Jinja2 template for the model-specific optimizer input
+        (e.g., ``mesh.jinja2``). Type is the internal Jinja2 template object.
+    archive_template : object
+        Compiled Jinja2 template used to generate an archive script.
+    environment : :class:`jinja2.Environment`
+        Inherited from the base class; configured to the Ostrich template path.
+    model : ModelBuilder
+        Inherited model adapter providing parameters and required files.
+    config : dict
+        Inherited calibration configuration dictionary.
+
+    Methods
+    -------
+    generate_optimizer_templates(output_path, return_text=False)
+        Render and write the optimizer input file (e.g., ``ostIn.txt``).
+    generate_parameter_templates(output_path, return_templates=False)
+        Write grouped parameter JSON templates under ``etc/templates``.
+    generate_etc_templates(output_path)
+        Create auxiliary directories and scripts under ``etc/``.
+    generate_model_templates(output_path)
+        Stage required model files and directories under ``model/``.
+    generate_obs_templates(output_path)
+        Create the ``observations/`` directory used by calibration runs.
     """
 
     def __init__(
         self,
         config: Dict,
-        model: 'ModelBuilder', # type: ignore
+        model: 'ModelBuilder',  # type: ignore
     ) -> 'OstrichTemplateEngine':
-        """
-        Initialize the OstrichTemplateEngine class.
+        """Construct the Ostrich templating engine.
+
+        Parameters
+        ----------
+        config : dict
+            Calibration configuration dictionary consumed by the templates.
+        model : ModelBuilder
+            Model adapter instance for MESH providing parameters and paths.
+
+        Returns
+        -------
+        OstrichTemplateEngine
+            The initialized instance (standard Python behavior returns ``None``).
+
+        Raises
+        ------
+        ValueError
+            If ``config`` is not provided.
         """
         if config is None:
             raise ValueError("`config` dictionary must be provided.")
@@ -66,19 +123,20 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         self,
         output_path: PathLike,
         return_text: bool = False,
-    ) -> str:
-        """
-        Generate a configuration file based on the provided parameters
-        and a template file.
+    ) -> str | None:
+        """Render the optimizer input file (e.g., ``ostIn.txt``).
 
         Parameters
         ----------
-        output_path : str
-            The path where the generated configuration file will be saved.
+        output_path : PathLike
+            Directory where the optimizer input will be written.
+        return_text : bool, default ``False``
+            When ``True``, return the rendered text instead of only writing it.
 
         Returns
         -------
-        None
+        str or None
+            Rendered content if ``return_text`` is ``True``; otherwise ``None``.
         """
         self.template.globals["default_dicts"] = DEFAULT_DICTS
 
@@ -112,9 +170,20 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         output_path,
         return_templates: bool = False,
     ) -> Optional[Sequence[JSON]]:
-        """"Generate parameter templates for the model using
-        the assumptions provided in OSTRICH calibration
-        software.
+        """Generate and persist parameter group templates.
+
+        Parameters
+        ----------
+        output_path : PathLike
+            Base output directory under which ``etc/templates`` will be created.
+        return_templates : bool, default ``False``
+            When ``True``, return the in-memory JSON-like objects written.
+
+        Returns
+        -------
+        Sequence[JSON] or None
+            Sequence of parameter group objects when ``return_templates`` is
+            ``True``; otherwise ``None``.
         """
         objects: List[JSON] = []
         # The parameter templates are generated and stored
@@ -153,19 +222,16 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         self,
         output_path: PathLike,
     ) -> None:
-        """
-        Generate necessary `etc` templates for OSTRICH calibration and
-        parts that are optional to be created, including archiving
-        strategy.
+        """Generate auxiliary assets under ``etc/``.
+
+        Creates directories such as ``etc/scripts``, ``etc/eval``, and
+        ``etc/templates``. Renders an ``archive.sh`` script and writes any
+        additional ``others`` JSON files provided by the model adapter.
 
         Parameters
         ----------
         output_path : PathLike
-            The path where the generated `etc` templates will be saved.
-
-        Returns
-        -------
-        None
+            Base output directory where ``etc`` will be created.
         """
         # create the `etc` directory
         etc_path = os.path.join(
@@ -216,19 +282,16 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         self,
         output_path: PathLike,
     ) -> None:
-        """
-        Generate a model files based on the provided parameters
-        and a template file. The forcing files is prefered not to
-        be moved, as it may create excessive data duplication.
+        """Stage model files required for evaluation.
+
+        Copies required files and directories from the model instance path to
+        ``<output_path>/model``. Forcing files are intentionally not copied to
+        avoid data duplication.
 
         Parameters
         ----------
         output_path : PathLike
-            The path where the generated model file will be saved.
-
-        Returns
-        -------
-        None
+            Base output directory where the ``model`` directory will be created.
         """
         # copy the required files to `output_path/model/`
         model_output_path = os.path.join(
@@ -260,17 +323,12 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         self,
         output_path: PathLike,
     ) -> None:
-        """
-        Generate observation files needed for calibration.
+        """Prepare observation directory used by the calibration run.
 
         Parameters
         ----------
         output_path : PathLike
-            The path where the generated observation file will be saved.
-        
-        Returns
-        -------
-        None
+            Base output directory under which ``observations`` will be created.
         """
         # create the `etc/observations/` directory
         obs_path = os.path.join(

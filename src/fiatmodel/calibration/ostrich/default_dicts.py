@@ -1,7 +1,22 @@
-'''
-Limited dictionaries with names consistent among other "calibration"
-methods.
-'''
+"""Canonical name mappings for Ostrich algorithms.
+
+Provides a compact lookup to translate user-provided algorithm names to the
+canonical identifiers expected by Ostrich configuration templates. The keys are
+lowercase normalized variants commonly found in literature or user inputs.
+
+Attributes
+----------
+_algorithm_equivalents : dict[str, str]
+    Mapping from a normalized algorithm name to the canonical Ostrich
+    identifier used in templates and configuration files.
+
+Examples
+--------
+>>> _algorithm_equivalents['levenberg-marquardt']
+'LevMar'
+>>> _algorithm_equivalents.get('geneticalgorithm')
+'GeneticAlg'
+"""
 
 _algorithm_equivalents = {
     'bisectionalgorithm': 'BisectionAlg',
@@ -31,5 +46,4 @@ _algorithm_equivalents = {
     'padds': 'PADDSAlg',
     'parapadds': 'ParallelPADDSAlg',
     'smooth': 'SMOOTH',
-    '': '',
 }

@@ -2,9 +2,34 @@
 
 """Evaluation utilities for MESH models.
 
-To make the evaluation as flexible and lightweight as possible, we use
-an individual script to perform the evaluation. This script is
-dynamically generated based on the FIAT configuration.
+This module provides the runtime evaluation script used during calibration
+for MESH-based workflows. It performs the following high-level steps:
+
+- Reads an evaluation configuration JSON (e.g., ``./etc/eval/eval.json``),
+    optionally converting numeric-like strings to native numbers for robust
+    templating and arithmetic.
+- Renders model input templates via :mod:`meshflow` using parameters/others
+    files in ``./etc/eval`` and writes them into the model instance directory.
+- Executes the MESH model executable and collects simulation results.
+- Aligns observations and simulations across one or more calibration date
+    intervals, inferring/resampling time frequency when needed.
+- Computes metrics using :mod:`HydroErr` and combines them into objective
+    functions via :mod:`numexpr`, writing single-valued CSV results for each
+    configured objective function.
+
+Notes
+-----
+- The script is designed to be dynamically generated and invoked by FIAT.
+- Resampling behavior currently simplifies to mean/sum per variable as a
+    placeholder for streamflow-only usage. Future releases may generalize this.
+- Time frequency inference uses :class:`pandas.DatetimeIndex` information and
+    falls back to selecting the mode of observed time deltas when needed.
+
+Examples
+--------
+Run the script directly after FIAT prepares the evaluation assets::
+
+    $ python src/fiatmodel/models/mesh/eval.py
 """
 
 # built-in imports
@@ -15,6 +40,16 @@ import json
 import shutil
 import warnings
 
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Mapping,
+    Optional,
+    Sequence,
+    Union
+)
+
 # external imports
 import xarray as xr
 import pandas as pd
@@ -22,6 +57,9 @@ import numexpr as ne
 import numpy as np
 
 import HydroErr
+
+from pandas.tseries.offsets import DateOffset
+
 
 # default environment
 my_env = os.environ.copy()
@@ -48,10 +86,37 @@ _FLOAT_RE = re.compile(
 # default environment
 my_env = os.environ.copy()
 
-def _parse_numeric_string(s: str):
-    """
-    Try to interpret a numeric-looking string as int or float.
-    Return the converted number, or the original string if not numeric.
+def _parse_numeric_string(s: str) -> Union[int, float, str]:
+    """Parse a numeric-like string into a number when possible.
+
+    Parameters
+    ----------
+    s : str
+        Input string to interpret. Leading/trailing whitespace is ignored.
+
+    Returns
+    -------
+    int or float or str
+        ``int`` if the string matches an integer pattern, ``float`` if it
+        matches a floating-point or scientific notation pattern, otherwise the
+        original string ``s``.
+
+    Notes
+    -----
+    - Integer detection accepts an optional leading sign (e.g., ``"-7"``).
+    - Float detection accepts decimal and scientific notation
+      (e.g., ``"3.14"``, ``"1e6"``).
+
+    Examples
+    --------
+    >>> _parse_numeric_string("42")
+    42
+    >>> _parse_numeric_string("3.14")
+    3.14
+    >>> _parse_numeric_string("1e3")
+    1000.0
+    >>> _parse_numeric_string("abc")
+    'abc'
     """
     if _INT_RE.match(s):
         # Keep as int if it fits typical Python int (Python int is unbounded anyway)
@@ -61,9 +126,29 @@ def _parse_numeric_string(s: str):
         return float(s)
     return s  # not numeric-looking
 
-def _convert_numeric_strings(obj):
-    """
-    Recursively walk lists/dicts and convert numeric-like strings.
+def _convert_numeric_strings(obj: Any) -> Any:
+    """Recursively convert numeric-like strings within mappings and sequences.
+
+    Walks nested ``dict`` and ``list`` structures, converting any string values
+    that look numeric into ``int`` or ``float`` using
+    :func:`_parse_numeric_string`.
+
+    Parameters
+    ----------
+    obj : Any
+        A Python object. If ``dict`` or ``list``, it will be traversed
+        recursively; all other types are returned as-is.
+
+    Returns
+    -------
+    Any
+        An object of the same structure as ``obj`` with numeric-like strings
+        converted to numbers.
+
+    Examples
+    --------
+    >>> _convert_numeric_strings({"a": "1", "b": ["2.5", "x"]})
+    {'a': 1, 'b': [2.5, 'x']}
     """
     if isinstance(obj, dict):
         return {k: _convert_numeric_strings(v) for k, v in obj.items()}
@@ -73,7 +158,16 @@ def _convert_numeric_strings(obj):
         return _parse_numeric_string(obj.strip())
     return obj  # leaves int, float, bool, None, etc. untouched
 
-def _make_object_hook():
+def _make_object_hook() -> Callable[[Dict[str, Any]], Dict[str, Any]]:
+    """Create a ``json.loads`` object hook that converts numeric-like strings.
+
+    Returns
+    -------
+    callable
+        A function suitable for use as ``object_hook`` in :func:`json.loads`
+        that applies :func:`_convert_numeric_strings` to every decoded mapping.
+    """
+
     def object_hook(d):
         for k, v in d.items():
             d[k] = _convert_numeric_strings(v)  # reuse earlier function
@@ -81,10 +175,53 @@ def _make_object_hook():
     return object_hook
 
 def _reset_dir(path: str) -> None:
+    """Remove a directory (if present) and recreate it empty.
+
+    This is a destructive operation intended for clearing an output directory
+    prior to writing evaluation results.
+
+    Parameters
+    ----------
+    path : str
+            Directory path to reset.
+
+    Notes
+    -----
+    - Uses :func:`shutil.rmtree` with ``ignore_errors=True`` so the call will
+        not raise if the directory does not exist.
+    - Recreates the directory with :func:`os.makedirs` and
+        ``exist_ok=True``.
+    """
+
     shutil.rmtree(path, ignore_errors=True)  # delete the directory entirely
     os.makedirs(path, exist_ok=True)         # recreate it empty
 
-def infer_frequency(time_index: pd.DatetimeIndex):
+def infer_frequency(time_index: pd.DatetimeIndex) -> DateOffset:
+    """Infer a regular time frequency from a :class:`pandas.DatetimeIndex`.
+
+    The function attempts, in order:
+
+    1. Use the explicit ``.freq`` if available.
+    2. Use ``.inferred_freq`` if available.
+    3. Compute time-step deltas and return the most common step.
+
+    Parameters
+    ----------
+    time_index : :class:`pandas.DatetimeIndex`
+        The time coordinate index from which to infer the sampling frequency.
+
+    Returns
+    -------
+    :class:`pandas.tseries.offsets.DateOffset`
+        A pandas date offset representing the inferred frequency.
+
+    Raises
+    ------
+    ValueError
+        If the index has fewer than 2 timestamps and frequency cannot be
+        inferred.
+    """
+
     # Try explicit or inferred freq
     if time_index.freq is not None:
         return time_index.freq
@@ -98,10 +235,39 @@ def infer_frequency(time_index: pd.DatetimeIndex):
     step = deltas.mode().iloc[0]
     return pd.tseries.frequencies.to_offset(step)
 
-def build_calibration_subset(ds: xr.Dataset, dates: dict) -> xr.Dataset:
-    """
-    Reindex ds to cover all [start, end] intervals in eval_config['dates'],
-    padding outside ds.time with NaNs.
+def build_calibration_subset(
+    ds: xr.Dataset, 
+    dates: Sequence[Mapping[str, Any]]
+) -> xr.Dataset:
+    """Build a union time index across configured intervals and reindex ``ds``.
+
+    Constructs the union of all ``[start, end]`` closed intervals from the
+    configuration and reindexes the dataset's ``time`` coordinate to this
+    union. Values outside the original ``ds.time`` range are not permitted and
+    will raise an error. Missing values introduced by the reindex are left as
+    NaN (no fill).
+
+    Parameters
+    ----------
+    ds : :class:`xarray.Dataset`
+        Dataset containing a ``time`` coordinate and corresponding index.
+    dates : sequence of mapping
+        Iterable of ``{"start": <str>, "end": <str>}`` dictionaries defining
+        closed intervals. Strings are parsed with :func:`pandas.to_datetime`.
+
+    Returns
+    -------
+    :class:`xarray.Dataset`
+        A dataset reindexed over the union of the requested intervals.
+
+    Raises
+    ------
+    KeyError
+        If ``time`` is not present as a coordinate index in ``ds`` or the
+        requested union extends beyond the dataset's time span.
+    ValueError
+        If interval endpoints are mismatched in length or ``end < start`` for
+        any interval.
     """
     # Extract intervals
     starts = pd.to_datetime([d['start'] for d in dates])
@@ -137,11 +303,57 @@ def build_calibration_subset(ds: xr.Dataset, dates: dict) -> xr.Dataset:
     out = ds.reindex(time=union_index)
     return out
 
-def resample_per_variable(ds, rule="1D", dim="time", methods=None, default=None, **kwargs):
-    """
-    methods: dict var -> reducer (string like 'mean'/'sum' or a callable)
-    default: reducer for variables not in methods; if None, they’re skipped
-    kwargs:  passed to the reducer (e.g., skipna=True, keep_attrs=True)
+def resample_per_variable(
+    ds: xr.Dataset,
+    rule: str = "1D",
+    dim: str = "time",
+    methods: Optional[Dict[str, Union[str, Callable]]] = None,
+    default: Optional[Union[str, Callable]] = None,
+    **kwargs: Any
+) -> xr.Dataset:
+    """Resample variables using per-variable reducers.
+
+    Parameters
+    ----------
+    ds : :class:`xarray.Dataset`
+        Input dataset to resample.
+    rule : str, default "1D"
+        Resampling rule (pandas offset alias), e.g., ``"1H"``, ``"1D"``.
+    dim : str, default "time"
+        Name of the time-like dimension to resample along.
+    methods : dict, optional
+        Mapping from variable name to reducer. A reducer can be either the
+        name of a resampler method (e.g., ``"mean"``, ``"sum"``) or a callable
+        to be used with :meth:`xarray.core.resample.DataArrayResample.reduce`.
+    default : str or callable, optional
+        Fallback reducer applied to variables not present in ``methods``.
+        If ``None``, variables without an explicit reducer are skipped.
+    **kwargs
+        Additional keyword arguments passed to the reducer (for example,
+        ``skipna=True``, ``keep_attrs=True``).
+
+    Returns
+    -------
+    :class:`xarray.Dataset`
+        A dataset containing the resampled variables.
+
+    Raises
+    ------
+    ValueError
+        If ``methods`` is not provided or a named reducer does not exist on
+        the resampler for a given variable.
+    TypeError
+        If a reducer is neither a string nor a callable.
+
+    Examples
+    --------
+    >>> import xarray as xr
+    >>> ds = xr.Dataset({
+    ...     'QO': (('time',), [1, 2, 3, 4]),
+    ...     'QI': (('time',), [10, 20, 30, 40])
+    ... }, coords={'time': pd.date_range('2000-01-01', periods=4, freq='H')})
+    >>> resample_per_variable(ds, rule='2H', methods={'QO': 'sum', 'QI': 'mean'})
+    <xarray.Dataset> ...  # doctest: +ELLIPSIS
     """
     if methods is None:
         raise ValueError("Provide methods, e.g. {'QO': 'sum', 'QI': 'mean'}")

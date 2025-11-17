@@ -1,4 +1,9 @@
-"""Module for building a MESH calibration instantiation."""
+"""MESH model builder for calibration workflows.
+
+Implements a concrete :class:`~fiatmodel.models.builder.ModelBuilder` for the
+MESH hydrological model, including sanity checks, parameter analysis,
+preparation of templated inputs, and staging of model artifacts.
+"""
 import pandas as pd
 import xarray as xr
 
@@ -37,7 +42,53 @@ else:
 NameType = Union[str, int, float]
 
 class MESH(ModelBuilder):
-    """Build the MESH calibration instantiation."""
+    """Builder for the MESH calibration instantiation.
+
+    Specializes the generic builder with MESH-specific file requirements,
+    parameter parsing, forcing detection, and output configuration.
+
+    Parameters
+    ----------
+    config : dict
+        Configuration dictionary for the MESH instance (including
+        ``instance_path`` and other paths/options).
+    calibration_software : dict
+        Calibration engine configuration; name is inferred upstream.
+    fluxes : Sequence[str], optional
+        Flux variables to be output and used in calibration.
+    dates : Sequence[dict[str, str]] or None, optional
+        List of window dictionaries with ``start`` and ``end`` ISO strings.
+
+    Attributes
+    ----------
+    required_files : list[str]
+        Files required to exist in the MESH instance directory.
+    required_dirs : list[str]
+        Directories required or created for a runnable instance.
+    timestamp : str
+        Time-stamp suffix used when creating backups.
+    forcing_file : list[str]
+        Absolute path(s) to forcing file(s) detected from run options.
+    forcing_freq : str or None
+        Inferred time-step frequency of forcing inputs.
+    outputs : list[str]
+        Expected output NetCDF files for selected fluxes.
+    parameters : dict
+        Assembled parameter structures (CLASS, hydrology, routing).
+    others : dict
+        Auxiliary metadata such as ``case_entry`` and ``info_entry``.
+
+    Methods
+    -------
+    sanity_check()
+        Validate required inputs and normalize forcing paths.
+    analyze(cache=None)
+        Build parameter structures and set expected outputs.
+    prepare()
+        Template parameters, bounds and constraints for calibration.
+    computational_units
+        Property returning counts of computational units by group.
+    """
 
     def __init__(
         self,
@@ -46,6 +97,19 @@ class MESH(ModelBuilder):
         fluxes: Sequence[str] = [],
         dates: Sequence[Dict[str, str]] = None,
     ) -> None:
+        """Initialize the MESH builder with configuration and options.
+
+        Parameters
+        ----------
+        config : dict
+            MESH instance configuration including ``instance_path``.
+        calibration_software : dict
+            Calibration engine settings passed through to the base builder.
+        fluxes : Sequence[str], optional
+            Flux variables to output, by default ``[]``.
+        dates : Sequence[dict[str, str]] or None, optional
+            Calibration window(s) with ``start`` and ``end`` ISO strings.
+        """
         # build the parent class
         super().__init__(
             config,
@@ -75,15 +139,22 @@ class MESH(ModelBuilder):
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     def sanity_check(self) -> bool:
-        """Perform sanity checks on the configured MESH instance.
+        """Perform sanity checks and normalize forcing configuration.
 
-        Two main tasks are performed here:
-        1. Check for the existence of required files in the instance path.
-        2. Check for the existence of forcing file(s) as specified in the
-           `MESH_input_run_options.ini` file; if found, adjust the path to
-           be absolute paths, as for calibration, we want to avoid moving
-           the forcing files, but have all instances point to the same location
-           to read the forcing data.
+        Checks that all required files exist under ``config['instance_path']``
+        and locates forcing file(s) via entries in ``MESH_input_run_options.ini``
+        (``fname``, ``fpath`` or ``FORCINGFILESLIST``). Paths are rewritten to
+        absolute, and a backup of modified files is created using ``timestamp``.
+
+        Returns
+        -------
+        bool
+            ``True`` if all checks pass and the instance is consistent.
+
+        Raises
+        ------
+        FileNotFoundError
+            If any required file or declared forcing file is missing.
         """
         # check self.instance_path and see if all files in `required_files` exist
         missing_files = []
@@ -317,7 +388,18 @@ class MESH(ModelBuilder):
         return True
 
     def _copy_minimum_files(self, dest_path: str) -> None:
-        """Copy the minimum required files to a new instance path."""
+        """Copy the minimum required files to a destination path.
+
+        Parameters
+        ----------
+        dest_path : str
+            Destination directory where required files are copied.
+
+        Raises
+        ------
+        FileNotFoundError
+            If any required file is missing in the source instance path.
+        """
         for file in self.required_files:
             src_file = os.path.join(self.config['instance_path'], file)
             dest_file = os.path.join(dest_path, file)
@@ -331,24 +413,21 @@ class MESH(ModelBuilder):
         return
 
     def _analyze_mesh_class(self) -> Dict:
-        """Build parameter dictionary from existing
-        `MESH_parameters_CLASS.ini` files.
+        """Analyze CLASS file and construct parameter structures.
 
-        FIXME: in future `model.py` recipe release of this model, the
-               `MESH_parameters.txt` and `MESH_parameters.nc` files can also
-               be used to build the parameter dictionary.
+        Parses ``MESH_parameters_CLASS.ini`` into multiple sections and builds
+        structures required for templating.
 
-        Analyze the CLASS file and return a dictionary containing the parsed sections.
-
-        Parameters
-        ----------
-        class_file : Union[PathLike | str]
-            The path to the CLASS file to be analyzed.
+        Notes
+        -----
+        Future releases may also use ``MESH_parameters.txt`` and
+        ``MESH_parameters.nc``.
 
         Returns
         -------
-        Tuple[Dict[str, Union[Dict, str]]]
-            A dictionary containing the parsed sections of the CLASS file.
+        tuple
+            ``(case_entry, info_entry, gru_entry)`` where entries are dicts
+            keyed per MESH/CLASS semantics.
         """
         # two necessary paths for the analysis
         class_file = os.path.join(
@@ -463,8 +542,12 @@ class MESH(ModelBuilder):
         return case_entry, info_entry, gru_entry
 
     def _analyze_mesh_hydrology(self) -> Dict:
-        """
-        Analyze the hydrology components of the MESH model.
+        """Analyze hydrology and routing components.
+
+        Returns
+        -------
+        tuple
+            ``(routing_dict, hydrology_dict)`` derived from hydrology config.
         """
         # extract sections from the hydrology file
         sections = hydrology_section_divide(
@@ -486,7 +569,13 @@ class MESH(ModelBuilder):
         return routing_dict, hydrology_dict
 
     def analyze(self, cache: PathLike = None) -> None:
-        """Initialize the MESH model calibration builder instance."""
+        """Analyze configuration and populate model parameters and outputs.
+
+        Parameters
+        ----------
+        cache : PathLike, optional
+            Optional cache directory for analysis artifacts (currently unused).
+        """
         # perform sanity checks
         self.sanity_check()
 
@@ -527,8 +616,13 @@ class MESH(ModelBuilder):
 
     @property
     def computational_units(self) -> Dict[str, int]:
-        """Return a dictionary with the number of computational units
-        for each element in the `parameters` dictionary object"""
+        """Counts of computational units per parameter group.
+
+        Returns
+        -------
+        dict[str, int]
+            Counts for each parameter group present after analysis.
+        """
         if self.step_logger['analyze']:
             return {
                 'class_dict': len(self.parameters['class_dict']),
@@ -545,13 +639,16 @@ class MESH(ModelBuilder):
 
     @property
     def parameter_constraints(self):
-        """Hard-coded parameter constraints for MESH model parameters.
-        The mathematical representation of these constraints are included
-        in the model-specific MESH builder documentation.
+        """Hard-coded and user-extendable parameter constraints.
 
-        Since this is a required attribute for the parent `Builder` class,
-        a setter is also defined to avoid attribute errors. Also, it provides
-        the capability for users to assign extra parameter constraints.
+        The mathematical representations are documented in the MESH builder
+        guide. A setter is provided to allow users to supply additional
+        constraints.
+
+        Returns
+        -------
+        dict
+            Current constraints mapping by parameter group.
         """
         # define a list of parameters that need to be included in contraints
         # these are MESH-specific --- hard-coded values
@@ -601,7 +698,13 @@ class MESH(ModelBuilder):
         return getattr(self, '_parameter_constraints')
     @parameter_constraints.setter
     def parameter_constraints(self, value: List[str]) -> None:
-        """Setter for the `parameter_constraints` property."""
+        """Set the parameter constraints mapping.
+
+        Parameters
+        ----------
+        value : dict
+            Constraints organized by parameter group and unit.
+        """
         if not isinstance(value, dict):
             raise TypeError('`parameter_constraints` must be a dictionary')
         self._parameter_constraints = value
@@ -609,9 +712,10 @@ class MESH(ModelBuilder):
         return
 
     def prepare(self) -> None:
-        """Prepare MESH requirements for calibration including
-        parameter templating, bounds, and constraints. Once prepared,
-        the object can be used in the calibration templating process.
+        """Prepare templated parameters, bounds, and constraints for calibration.
+
+        Ensures analysis is complete, constructs ``templated_parameters`` by
+        substituting calibratable names, and assigns bounds from configuration.
         """
         # check whether the instance has been analyzed
         if not self.step_logger['analyze']:

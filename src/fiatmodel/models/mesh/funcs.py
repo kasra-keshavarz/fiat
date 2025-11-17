@@ -1,3 +1,9 @@
+"""Helper functions for parsing and templating MESH inputs.
+
+Provides utilities to parse CLASS and hydrology configuration blocks,
+derive parameter structures, generate parameter names for templating,
+and perform small text/file transformations used by the MESH builder.
+"""
 # built-in imports
 from typing import (
     Dict,
@@ -25,18 +31,39 @@ else:
 def remove_comments(
     string
 ) -> str:
-    '''remove comment strings in the CLASS file strings'''
-    #return re.sub(r'\s+\d{2}\s.*$', '', sections[0], flags=re.MULTILINE)
+    """Remove trailing CLASS-style comments from a string.
+
+    Parameters
+    ----------
+    string : str
+        Input text containing CLASS lines with trailing comment fields.
+
+    Returns
+    -------
+    str
+        Text with comment portions removed.
+    """
     return re.sub(r'\s+\d{2}\s(?:[^\n ]| (?! ))*$', '', string, flags=re.MULTILINE)
 
 def class_section_divide(
     section: str,
     **read_csv_kwargs
 ) -> Dict:
-    '''Refer to the following link for comprehensive, and hard-coded
-    values for the CLASS sections are implemented as there is no other
-    way around it.
-    '''
+    """Split a CLASS block into named sub-sections.
+
+    Parameters
+    ----------
+    section : str
+        Text block for a single CLASS computational unit.
+    **read_csv_kwargs
+        Unused; placeholder for future parsing customizations.
+
+    Returns
+    -------
+    dict
+        Mapping with keys ``veg1``, ``veg2``, ``hyd1``, ``hyd2``, ``soil``,
+        ``prog1``, ``prog2``, and ``prog3``.
+    """
     # split lines
     lines = section.splitlines()
 
@@ -65,34 +92,22 @@ def class_section_divide(
 def parse_class_meta_data(
     case_section : str,
 ) -> Dict:
-    """Parse the CLASS file's meta-data section to extract
-    `info_entry` and `case_entry` dictionaries, necessary
-    to run MESHFlow's `meshflow.utility.render_class_template`
-    function.
+    """Parse the meta-data header of a CLASS file.
+
+    Extracts author/location info and case-level numeric metadata required by
+    templating utilities.
 
     Parameters
     ----------
     case_section : str
-        The section of the CLASS file that contains the meta-data.
-        It should be a string containing the first four lines of the
-        CLASS file, which are:
-        - Title
-        - Author
-        - Place
-        - Case information (centroid latitude, longitude, reference heights, etc.)
-
+        First four lines of the CLASS file header (title, author, place, case).
 
     Returns
     -------
-    info_entry : Dict
-        A dictionary containing the author and location information.
-    case_entry : Dict
-        A dictionary containing the case information, including:
-        - Centroid latitude and longitude
-        - Reference heights for wind speed, specific humidity, and air temperature
-        - Reference height surface roughness
-        - Number of land cover types (NL)
-        - Number of soil types (NM)
+    tuple
+        ``(info_entry, case_entry)`` where ``info_entry`` contains author and
+        location, and ``case_entry`` includes centroid coordinates, reference
+        heights, and counts (``NL``, ``NM``).
     """
     # remove comments from the section
     case_section = remove_comments(case_section)
@@ -133,23 +148,23 @@ def parse_class_meta_data(
 def determine_gru_type(
     line : str
 ) -> int:
-    """
-    Return the 1-based column index of the first numeric token that is exactly '1.000'
-    (or numerically equal to 1.0 with three decimal places) in a line of mixed data.
+    """Determine GRU type index from a CLASS vegetation header line.
 
-    The line may contain:
-      - Multiple spaces between columns
-      - Trailing non-numeric descriptor fields (tokens containing any letter)
-      - Other numeric fields (including things like 05)
+    Parameters
+    ----------
+    line : str
+        Whitespace-separated line containing GRU fractions and descriptors.
 
-    Parsing stops once a token containing any alphabetic character appears, assuming
-    the remainder are descriptors rather than data columns.
+    Returns
+    -------
+    int or None
+        1-based index of the first column with value ``1.000`` (or first
+        positive when fractions sum to 1); may be ``None`` if not found.
 
-    Args:
-        line: A string containing whitespace-separated columns.
-
-    Returns:
-        The 1-based column number where the first 1.000 occurs, or None if not found.
+    Raises
+    ------
+    ValueError
+        If the line does not represent a valid CLASS GRU type (sum is 0).
     """
     tokens = line.strip().split()
     slice_len = min(5, len(tokens))
@@ -184,7 +199,24 @@ def parse_class_veg1(
     veg_section : str,
     gru_idx : int,
 ) -> Dict[str, float]:
-    """Parse the first vegetation parameter part of the CLASS section/block
+    """Parse the first vegetation parameter section of CLASS.
+
+    Parameters
+    ----------
+    veg_section : str
+        Four-line vegetation block.
+    gru_idx : int
+        1-based GRU column index.
+
+    Returns
+    -------
+    dict[str, float]
+        Parsed parameter values keyed by variable name.
+
+    Raises
+    ------
+    ValueError
+        If the section has an unexpected number of lines or index is invalid.
     """
     # the `veg_section` must only be 4 lines
     veg_lines = veg_section.splitlines()
@@ -241,7 +273,24 @@ def parse_class_veg2(
     veg_section : str,
     gru_idx : int,
 ) -> Dict[str, float]:
-    """Parse the second vegetation parameter part of the CLASS section/block
+    """Parse the second vegetation parameter section of CLASS.
+
+    Parameters
+    ----------
+    veg_section : str
+        Three-line vegetation block.
+    gru_idx : int
+        1-based GRU column index.
+
+    Returns
+    -------
+    dict[str, float]
+        Parsed parameter values keyed by variable name.
+
+    Raises
+    ------
+    ValueError
+        If the section has an unexpected number of lines or index is invalid.
     """
     # the `veg_section` must only be 3 lines
     veg_lines = veg_section.splitlines()
@@ -282,7 +331,17 @@ def parse_class_veg2(
 def parse_class_hyd1(
     hyd_line : str,
 ) -> Dict[str, float]:
-    """Parse the first hydrology parameter part of the CLASS section/block
+    """Parse the first hydrology line of the CLASS block.
+
+    Parameters
+    ----------
+    hyd_line : str
+        Hydrology line containing numeric parameters.
+
+    Returns
+    -------
+    dict[str, float]
+        Parsed hydrology parameters.
     """
     # remove comments
     hyd_line = remove_comments(hyd_line)
@@ -304,7 +363,17 @@ def parse_class_hyd1(
 def parse_class_hyd2(
     hyd_line : str,
 ) -> Dict[str, float]:
-    """Parse the second hydrology parameter part of the CLASS section/block
+    """Parse the second hydrology line of the CLASS block.
+
+    Parameters
+    ----------
+    hyd_line : str
+        Hydrology line containing numeric parameters and a descriptor tail.
+
+    Returns
+    -------
+    dict[str, float]
+        Parsed hydrology parameters including ``mid`` descriptor.
     """
     # remove comments
     hyd_line = remove_comments(hyd_line)
@@ -327,7 +396,17 @@ def parse_class_hyd2(
 def parse_class_soil(
     soil_section : str,
 ) -> Dict[str, float]:
-    """Parse the soil parameters part of the CLASS section/block
+    """Parse the soil section of the CLASS block.
+
+    Parameters
+    ----------
+    soil_section : str
+        Three-line soil block.
+
+    Returns
+    -------
+    dict[str, float]
+        Parsed soil parameters for three layers.
     """
 
     # remove comments
@@ -358,7 +437,17 @@ def parse_class_soil(
 def parse_class_prog1(
     prog_line : str,
 ) -> Dict[str, float]:
-    """Parse the first program parameter part of the CLASS section/block
+    """Parse the first prognostic line of the CLASS block.
+
+    Parameters
+    ----------
+    prog_line : str
+        Prognostic line containing numeric parameters.
+
+    Returns
+    -------
+    dict[str, float]
+        Parsed prognostic parameters.
     """
     # remove comments
     prog_line = remove_comments(prog_line)
@@ -382,7 +471,17 @@ def parse_class_prog1(
 def parse_class_prog2(
     prog_line : str,
 ) -> Dict[str, float]:
-    """Parse the second program parameter part of the CLASS section/block
+    """Parse the second prognostic line of the CLASS block.
+
+    Parameters
+    ----------
+    prog_line : str
+        Prognostic line containing numeric parameters.
+
+    Returns
+    -------
+    dict[str, float]
+        Parsed prognostic parameters.
     """
     # remove comments
     prog_line = remove_comments(prog_line)
@@ -407,7 +506,17 @@ def parse_class_prog2(
 def parse_class_prog3(
     prog_line : str,
 ) -> Dict[str, float]:
-    """Parse the third program parameter part of the CLASS section/block
+    """Parse the third prognostic line of the CLASS block.
+
+    Parameters
+    ----------
+    prog_line : str
+        Prognostic line containing numeric parameters.
+
+    Returns
+    -------
+    dict[str, float]
+        Parsed prognostic parameters.
     """
     # remove comments
     prog_line = remove_comments(prog_line)
@@ -432,6 +541,20 @@ def iter_sections(
     text: str,
     drop_separators: bool=True,
 ):
+    """Iterate over named sections in a hydrology/ini-like file.
+
+    Parameters
+    ----------
+    text : str
+        Full text of the configuration file.
+    drop_separators : bool, default ``True``
+        If ``True``, remove separator lines when constructing section bodies.
+
+    Yields
+    ------
+    tuple[str, str]
+        Section header and body text.
+    """
     # default re directives
     HEADER_RE = re.compile(r'^#{3,}\s*(.*?)\s*#*\s*$', re.MULTILINE)
     SEP_LINE_RE = re.compile(r'^-{3,}#.*$')
@@ -468,7 +591,17 @@ def iter_sections(
 def hydrology_section_divide(
     hydrology_file: os.PathLike | str,
 ) -> List[str]:
-    """
+    """Split a hydrology file into content sections.
+
+    Parameters
+    ----------
+    hydrology_file : path-like
+        File path to the MESH hydrology configuration.
+
+    Returns
+    -------
+    list[str]
+        List of section bodies, in file order.
     """
     text = Path(hydrology_file).read_text(encoding="utf-8")
     sections = [b for h, b in iter_sections(text)]
@@ -479,9 +612,19 @@ def param_name_gen(
     computational_unit: NameType,
     name: NameType,
 ) -> str:
-    """Generalized method to template parameter names
-    based on hydrological computational unit (gru, hru,
-    etc.) and the name of the parameter
+    """Generate a canonical parameter name for templating.
+
+    Parameters
+    ----------
+    computational_unit : str or int or float
+        Identifier of the hydrological unit (e.g., GRU index).
+    name : str or int or float
+        Base parameter name.
+
+    Returns
+    -------
+    str
+        Uppercased name prefixed with ``_`` and the unit (e.g., ``_1FOO``).
     """
     # making strings
     _unit = str(computational_unit)
@@ -497,9 +640,21 @@ def replace_prefix_in_last_two_lines(
     path: PathLike,
     replacements: Tuple[str],
     width: int = 17):
-    """
-    Replace the first `width` characters of the last two lines of `path`
-    with `replacement` (padded/truncated to exactly `width`).
+    """Overwrite a fixed-width prefix on the last two lines of a file.
+
+    Parameters
+    ----------
+    path : path-like
+        File to modify.
+    replacements : tuple[str]
+        Two replacement strings applied to the last two lines respectively.
+    width : int, default 17
+        Number of prefix characters to overwrite.
+
+    Raises
+    ------
+    ValueError
+        If the file contains fewer than two lines.
     """
     p = Path(path)
     lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -521,7 +676,18 @@ def replace_prefix_in_last_two_lines(
     return
 
 def spaces(h: int) -> str:
-    """Return a string of `h` spaces
+    """Return padding spaces based on hour value.
+
+    Parameters
+    ----------
+    h : int
+        Hour component (0-23).
+
+    Returns
+    -------
+    str or None
+        ``"   "`` for ``h < 10``; ``"  "`` for ``10 < h < 25``;
+        otherwise ``None``.
     """
     # if h is only one digit, return 3 spaces
     if h < 10:

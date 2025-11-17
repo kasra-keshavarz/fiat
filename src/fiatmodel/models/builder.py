@@ -1,4 +1,9 @@
-"""General builder class for the package."""
+"""General builder infrastructure for model calibration.
+
+Defines the abstract :class:`ModelBuilder` base used by concrete model
+implementations to analyze configurations, prepare run assets, and
+materialize calibration-ready instances.
+"""
 # builtin imports
 from typing import (
     Dict,
@@ -24,7 +29,70 @@ else:
 NameType = Union[str, int, float]
 
 class ModelBuilder(object):
-    """Base class for all builders in the package."""
+    """Base class for model builders used in FIAT.
+
+    Orchestrates common state and lifecycle for model-specific builders.
+
+    Parameters
+    ----------
+    config : dict
+        Configuration dictionary for the model instance (paths, options).
+    calibration_software : str
+        Name of the calibration engine (e.g., ``"ostrich"``).
+    model_software : str
+        Name of the model targeted by this builder (e.g., ``"mesh"``).
+    fluxes : Sequence[str], optional
+        Model flux variables of interest to be produced or analyzed.
+    dates : dict[str, Sequence[str]] or None, optional
+        Calibration start/stop window and other date ranges. When omitted,
+        a warning is issued and defaults are assumed elsewhere.
+
+    Attributes
+    ----------
+    config : dict
+        Stored configuration for the model instance.
+    calibration_software : str
+        Selected calibration engine name.
+    model_software : str
+        Model software family in lower case.
+    forcing_file : list
+        Paths to forcing files referenced by the model (may be empty).
+    forcing_freq : object or None
+        Frequency associated with forcing inputs when available.
+    required_files : list[str]
+        Files that must be staged into the model run directory.
+    required_dirs : list[str]
+        Directories that must be staged into the model run directory.
+    step_logger : dict[str, bool]
+        Flags indicating whether lifecycle steps ran (``analyze``, ``prepare``, ``build``).
+    parameters : dict
+        Parameter definitions discovered during analysis.
+    templated_parameters : dict
+        Parameter groups ready to be written as templates.
+    parameter_constraints : dict
+        Optional constraints applied to parameters by the calibration.
+    parameter_bounds : dict
+        Optional bounds applied to parameters by the calibration.
+    others : dict
+        Additional model-specific objects to template (e.g., options files).
+    fluxes : Sequence[str]
+        Flux variables to output or evaluate.
+    outputs : list
+        Output files produced by the model (populated by subclasses).
+    dates : dict[str, Sequence[str]]
+        Date window(s) used for calibration and evaluation.
+
+    Methods
+    -------
+    analyze()
+        Inspect configuration and populate parameter structures.
+    prepare()
+        Stage files/directories needed to build a calibration instance.
+    build(save_path)
+        Create a calibration-ready instance under ``save_path``.
+    sanity_check()
+        Validate internal state; implemented by subclasses.
+    """
     def __init__(
         self,
         config: Dict,
@@ -33,6 +101,21 @@ class ModelBuilder(object):
         fluxes: Sequence[str] = [],
         dates: Dict[str, Sequence[str]] = None,
     ) -> None:
+        """Initialize common builder state.
+
+        Parameters
+        ----------
+        config : dict
+            Model configuration dictionary used by the builder.
+        calibration_software : str
+            Calibration engine name.
+        model_software : str
+            Model software name.
+        fluxes : Sequence[str], optional
+            Flux variables to track for outputs, by default empty.
+        dates : dict[str, Sequence[str]] or None, optional
+            Calibration period definitions; when omitted, a warning is issued.
+        """
          # store the configuration dictionary
         if not isinstance(config, dict):
             raise TypeError('`config` must be a dictionary')
@@ -93,14 +176,16 @@ class ModelBuilder(object):
     def build(
         self,
         save_path: PathLike = None) -> None:
-        """Build a calibration instance of MESH model given
-        the available `self.config` dictionary and
-        the analyzed `self.parameters` dictionary.
+        """Build a calibration-ready model instance at the target path.
+
+        Uses the current configuration and analyzed parameters to assemble
+        a runnable directory structure for the chosen calibration workflow.
 
         Parameters
         ----------
         save_path : PathLike
-            The path where the built instance will be saved.
+            Destination directory for the built instance (``str`` or
+            :class:`pathlib.Path`).
         """
         # check whether `save_path` is provided
         if save_path is None:
@@ -127,19 +212,38 @@ class ModelBuilder(object):
         return
 
     def sanity_check(self) -> bool:
-        """Perform sanity checks on the configured instance."""
+        """Perform sanity checks on the configured instance.
+
+        Returns
+        -------
+        bool
+            True if checks pass; subclasses should raise errors otherwise.
+        """
         raise NotImplementedError("Subclasses must implement this method.")
 
     def __repr__(self) -> str:
+        """Representation for debugging.
+
+        Returns
+        -------
+        str
+            A concise string with the class name and key state.
+        """
         return f"{self.__class__.__name__}(config={self.config})"
     
     def analyze(self) -> None:
-        """Analyze the provided configuration and populate
-        the `self.parameters` dictionary."""
+        """Analyze configuration and populate parameter structures.
+
+        Subclasses should read model metadata and construct ``parameters``,
+        ``templated_parameters``, ``parameter_bounds``, and related state.
+        """
         raise NotImplementedError("Subclasses must implement this method.")
     
     def prepare(self) -> None:
-        """Prepare the necessary files and directories
-        for building the calibration instance."""
+        """Prepare files and directories for building the instance.
+
+        Subclasses should gather and stage all prerequisite assets required
+        to execute :meth:`build`.
+        """
         raise NotImplementedError("Subclasses must implement this method.")
     
