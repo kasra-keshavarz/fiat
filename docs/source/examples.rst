@@ -69,9 +69,7 @@ Load observations
 .. code-block:: python
 
    import xarray as xr
-   obs_path = ('/Users/kasrakeshavarz/Documents/github-repos'
-               '/research-basin-benchmarking/1-model-setup/3-observations/'
-               'wolf-creek-research-basin/post-processed-gauge-data/wolf-creek-gauge-data.nc')
+   obs_path = ('/path/to/wolf-creek-gauge-data.nc')
 
 Instantiate Calibration
 -----------------------
@@ -82,7 +80,7 @@ Instantiate Calibration
        calibration_software='ostrich',
        model_software='mesh',
        calibration_config={
-           'instance_path': '/Users/kasrakeshavarz/Downloads/test/',  # where the calibration instance is generated
+           'instance_path': '/path/to/wolf-creek-calibration-instance/',  # where the calibration instance is generated
            'random_seed': int(time.time()),
            'algorithm': 'ParallelDDS',
            'algorithm_specs': {  # refer to Ostrich manual for keys
@@ -90,6 +88,7 @@ Instantiate Calibration
                'MaxIteration': 10_000,
                'UseRandomParamValue': None,
            },
+           'spinup_start': '1992-12-01 00:00:00',
            'dates': [  # one or more calibration dates
                {
                    'start': '1995-01-01 00:00:00',
@@ -103,7 +102,7 @@ Instantiate Calibration
            },
        },
        model_config={
-           'instance_path': './wolf-creek-research-basin/mesh/',
+           'instance_path': '/path/to/wolf-creek-mesh-instance/',
            'parameter_bounds': {
                'class': class_dict_bounds,
                'hydrology': hydrology_dict_bounds,
