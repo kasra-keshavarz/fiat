@@ -5,10 +5,10 @@ build-backend = "hatchling.build"
 [project]
 name = "fiatmodel"
 dynamic = ["version"]
-description = 'Framework for Iterative Assessment and Testing of Computer Models'
+description = 'Framework for Iterative Assessment and Testing of Hydrological Models'
 readme = "README.md"
 requires-python = ">=3.9"
-license = "GPL-3.0-or-later"
+license = "AGPL-3.0-or-later"
 keywords = []
 authors = [
   { name = "Kasra Farmer", email = "kasra.keshavarz1@ucalgary.ca" },
