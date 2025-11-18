@@ -2,8 +2,8 @@
 The relevant documentation is located on [Readthedocs](https://fiathydro.readthedocs.io).
 
 # License
-Copyright (c) 2025, FIAT developers
-Copyright (c) 2025, University of Calgary
+Copyright (c) 2025, FIAT developers<br>
+Copyright (c) 2025, University of Calgary<br>
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Affero General Public License as published by
