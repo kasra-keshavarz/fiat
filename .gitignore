@@ -208,7 +208,8 @@ __marimo__/
 
 # Test stuff - temporary
 # tests/ - I don't want the test Notebooks to be uploaded for now
-wolf-creek-research-basin/
+wolf-creek-research-basin-backup/
+results/*
 
 # Mac stuff
 .DS_Store
