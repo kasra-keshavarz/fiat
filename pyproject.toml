@@ -1,0 +1,85 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fiatmodel"
+dynamic = ["version"]
+description = 'Framework for Iterative Assessment and Testing of Hydrological Models'
+readme = "README.md"
+requires-python = ">=3.9"
+license = "AGPL-3.0-or-later"
+keywords = []
+authors = [
+  { name = "Kasra Farmer", email = "kasra.keshavarz1@ucalgary.ca" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = [
+  "numpy>=1.22",
+  "pandas>=1.5",
+  "xarray>=2023.1.0",
+  "pint>=0.24.4",
+  "pint-xarray>=0.5.1",
+  "numexpr>=2.14.1",
+  "jinja2>=3.1",
+  "HydroErr>=1.24",
+  "dask>=2023.10.0",
+  "importlib-resources>=5; python_version < \"3.9\"",
+]
+
+[tool.hatch.build]
+include = [
+  "src/fiatmodel/**/*.py",
+  "src/fiatmodel/models/mesh/defaults.json",
+  "src/fiatmodel/calibration/ostrich/templates/**",
+]
+
+[project.urls]
+Documentation = "https://github.com/kasra-keshavarz/fiat#readme"
+Issues = "https://github.com/kasra-keshavarz/fiat/issues"
+Source = "https://github.com/kasra-keshavarz/fiat"
+
+[tool.hatch.version]
+path = "src/fiatmodel/__about__.py"
+
+[tool.hatch.envs.types]
+extra-dependencies = [
+  "mypy>=1.0.0",
+]
+[tool.hatch.envs.types.scripts]
+check = "mypy --install-types --non-interactive {args:src/fiatmodel tests}"
+
+[tool.coverage.run]
+source_pkgs = ["fiatmodel", "tests"]
+branch = true
+parallel = true
+omit = [
+  "src/fiatmodel/__about__.py",
+]
+
+[tool.coverage.paths]
+fiat = ["src/fiatmodel", "*/fiatmodel/src/fiatmodel"]
+tests = ["tests", "*/fiatmodel/tests"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fiatmodel"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src"]

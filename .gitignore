@@ -205,3 +205,25 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Test stuff - temporary
+# tests/ - I don't want the test Notebooks to be uploaded for now
+wolf-creek-research-basin-backup/
+wolf-creek-research-basin-calibration/
+results/*
+
+# Mac stuff
+.DS_Store
+
+# Jupyter stuff
+.ipynb_checkpoints/
+
+# MESH executables
+sa_mesh
+mpi_sa_mesh
+
+# VSCode
+.vscode/
+
+# FIAT backup files
+*.bak*
