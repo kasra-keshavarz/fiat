@@ -71,8 +71,8 @@ Load observations
    import xarray as xr
    obs_path = ('/path/to/wolf-creek-gauge-data.nc')
 
-Instantiate Calibration
------------------------
+Instantiate ``Calibration``
+---------------------------
 
 .. code-block:: python
 
@@ -128,5 +128,8 @@ Prepare the workflow
 
 .. code-block:: python
 
-   c.prepare(output_path='/Users/kasrakeshavarz/Downloads/test/')
+   c.prepare(output_path='/path/to/instance/destination/dir/')
 
+A complete, runnable notebook example is available in the
+`examples <https://github.com/kasra-keshavarz/FIATModel/tree/main/examples>`_
+directory of this repository.
