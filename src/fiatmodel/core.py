@@ -177,6 +177,7 @@ class Calibration(object):
                     calibration_software=self.calibration_software,
                     fluxes=self.calibration_config.get('objective_functions').keys(),
                     dates=self.calibration_config.get('dates'),
+                    spinup=self.calibration_config.get('spinup_start'),
                 )
             case _:
                 raise ValueError(f"Unsupported model software: {self.model_software}")

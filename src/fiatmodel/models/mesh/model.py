@@ -95,7 +95,8 @@ class MESH(ModelBuilder):
         config: Dict,
         calibration_software: Dict,
         fluxes: Sequence[str] = [],
-        dates: Sequence[Dict[str, str]] = None,
+        dates: Sequence[Dict[str, str]] | None = None,
+        spinup: str | None = None,
     ) -> None:
         """Initialize the MESH builder with configuration and options.
 
@@ -117,6 +118,7 @@ class MESH(ModelBuilder):
             model_software='mesh',
             fluxes=fluxes,
             dates=dates,
+            spinup=spinup,
         )
 
         # build MESH-sepcific required files
@@ -344,6 +346,12 @@ class MESH(ModelBuilder):
             # duration specified by the user
             earliest = pd.Timestamp(earliest) - pd.tseries.frequencies.to_offset(self.forcing_freq)
             latest = pd.Timestamp(latest) + pd.tseries.frequencies.to_offset(self.forcing_freq)
+
+            # one has to also consider spinup too
+            if self.spinup:
+                spinup_start = parser.parse(self.spinup)
+                if spinup_start < earliest:
+                    earliest = spinup_start
 
             # calculate the year, day_of_year, hour, minute
             # for both the `earliest` and `latest` dates

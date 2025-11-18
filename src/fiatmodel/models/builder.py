@@ -99,7 +99,8 @@ class ModelBuilder(object):
         calibration_software: str,
         model_software: str,
         fluxes: Sequence[str] = [],
-        dates: Dict[str, Sequence[str]] = None,
+        dates: Sequence[Dict[str, str]] | None = None,
+        spinup: str | None = None,
     ) -> None:
         """Initialize common builder state.
 
@@ -113,7 +114,7 @@ class ModelBuilder(object):
             Model software name.
         fluxes : Sequence[str], optional
             Flux variables to track for outputs, by default empty.
-        dates : dict[str, Sequence[str]] or None, optional
+        dates : Sequence[Dict[str, str]] | None, optional
             Calibration period definitions; when omitted, a warning is issued.
         """
          # store the configuration dictionary
@@ -159,6 +160,9 @@ class ModelBuilder(object):
         # fluxes for outputing
         self.fluxes = fluxes
         self.outputs = []  # to be populated later by child classes
+
+        # spinup period for model warm-up
+        self.spinup = spinup
 
         # dates must be provided, otherwise, warn the user
         if dates is None:
