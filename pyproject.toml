@@ -77,3 +77,9 @@ exclude_lines = [
   "if __name__ == .__main__.:",
   "if TYPE_CHECKING:",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fiatmodel"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src"]
