@@ -1,5 +1,5 @@
 # Documentation
-The relevant documentation is located on [Readthedocs](https://fiatmodel.readthedocs.io).
+The relevant documentation is located on [Readthedocs](https://fiathydro.readthedocs.io).
 
 # License
 Copyright (c) 2025, FIAT developers
