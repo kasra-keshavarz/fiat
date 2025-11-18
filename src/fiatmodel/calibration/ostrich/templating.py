@@ -81,7 +81,7 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         self,
         config: Dict,
         model: 'ModelBuilder',  # type: ignore
-    ) -> 'OstrichTemplateEngine':
+    ) -> None:
         """Construct the Ostrich templating engine.
 
         Parameters
@@ -123,7 +123,7 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         self,
         output_path: PathLike,
         return_text: bool = False,
-    ) -> str | None:
+    ):
         """Render the optimizer input file (e.g., ``ostIn.txt``).
 
         Parameters
@@ -169,7 +169,7 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         self,
         output_path,
         return_templates: bool = False,
-    ) -> Optional[Sequence[JSON]]:
+    ):
         """Generate and persist parameter group templates.
 
         Parameters
