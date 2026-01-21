@@ -60,6 +60,9 @@ import HydroErr
 
 from pandas.tseries.offsets import DateOffset
 
+# fiat imports
+from fiatmodel.models.valid_ofs import hydro_err_ofs # python list object
+
 
 # default environment
 my_env = os.environ.copy()
@@ -431,11 +434,14 @@ if __name__ == "__main__":
     # run the MESH model
     try:
         # subprocess running model
-        subprocess.run(
-            ['./' + eval_config['model_executable']],
-            cwd=eval_config['model_instance_path'],
-            check=True,
-            env=my_env)
+        with open(os.path.join('model_run.log'), 'w') as f:
+            subprocess.run(
+                ['./' + eval_config['model_executable']],
+                cwd=eval_config['model_instance_path'],
+                check=True,
+                env=my_env,
+                stdout=f,
+                stderr=f)
 
         # first read the time-series of obs/sim for
         #      each element in the `obs` file
@@ -499,87 +505,199 @@ if __name__ == "__main__":
 
         # evaluate each objective function
         of_values = {}
+        helper_ofs = {}
+        custom_ofs = {}
 
-        for flux, metrics in eval_config.get('objective_functions').items():
-            sims = {}
-            obs = {}
-            # start populating of_values
-            of_values[flux] = {}
-            # assign simulation results for the selected flux
-            for st in station_ids:
-                # sims dictionary
-                sims[obs_sub['name'].sel(subbasin=st).to_numpy().tolist()] = sim_sub[flux].sel(subbasin=st).to_series()
-                # same for obs dictionary
-                obs[obs_sub['name'].sel(subbasin=st).to_numpy().tolist()] = obs_sub[flux].sel(subbasin=st).to_series()
-            # metric (for example, kge_2012), and ofs (list of individual objective functions
-            for metric, ofs in metrics.items():
-                # add elements to `of_values`
-                of_values[flux][metric] = []
-                # calculate the metric value
-                he_metric = getattr(HydroErr, metric)
-                metric_dict = {}
-                for name in obs.keys():
-                    metric_dict[name] = he_metric(sims[name], obs[name])
+        for group, fluxes in eval_config.get('objective_functions').items():
+            if 'helper' in group:
+                for flux, metrics in fluxes.items():
+                    # define empty sims and obs dictionaries - based on chosen `flux`
+                    sims = {}
+                    obs = {}
 
-                for idx, of in enumerate(ofs, start=1): # a list of objective functions
-                    result = ne.evaluate(of, local_dict=metric_dict)
-                    of_values[flux][metric] = result
+                    # start populating `helper_ofs`
+                    helper_ofs[flux] = {}
 
-                    # write the of results to a .csv file (with only a single element)
-                    with open(
-                        os.path.join(
-                            './etc',
-                            'eval',
-                            f'{flux.upper()}_{metric}_{idx}.csv',
-                        ),
-                        'w',
-                    ) as f:
-                        f.write(f'{result}')
+                    # calculate metric values for the selected flux
+                    # and metric type (e.g., kge_2012, etc.)
+                    for metric in metrics.keys():
+                        helper_ofs[flux][metric] = []
+                        # if it is a routine metric (i.e., from HydroErr),
+                        # then calculate it based on sims/obs dictionary values
+                        if metric in hydro_err_ofs:
+                            # whenever choosing from sim/obs dictionaries, we need to use station_ids
+                            for st in station_ids:
+                                # sims dictionary
+                                sims[obs_sub['name'].sel(subbasin=st).to_numpy().tolist()] = sim_sub[flux].sel(subbasin=st).to_series()
+                                # same for obs dictionary
+                                obs[obs_sub['name'].sel(subbasin=st).to_numpy().tolist()] = obs_sub[flux].sel(subbasin=st).to_series()
+
+                            # extract the proper HydroErr metric function to use
+                            # and assign it to `he_metric`. Therefore, `he_metric` points
+                            # to a function in HydroErr library
+                            he_metric = getattr(HydroErr, metric)
+
+                            # now, go over whatever observation is available, and build the metric_dict
+                            metric_dict = {}
+                            for name in obs.keys():
+                                metric_dict[name] = he_metric(sims[name], obs[name])
+
+                            # go over metric values for each station included and calculate the metric value
+                            # and then store it in helper_ofs[flux][metric] dictionary in form of a list item
+                            for helper_of in metrics[metric]:
+                                result = ne.evaluate(helper_of, local_dict=metric_dict)
+                                helper_ofs[flux][metric].append(result)
+                        # meaning, this is a custom metric that is assigned as `helper` function,
+                        # so it's results won't be printed as a .csv file, but is used for other
+                        # `custom` objective functions
+                        else:
+                            # because this helper function will be based on those already defined
+                            # in helper_ofs[flux].keys(), we will do some string adjustments
+                            # to assure evaluation goes well
+                            # replace any existing helper_ofs[flux] keys in the
+                            # expression strings with explicit helper_ofs references
+                            existing_keys = [k for k in helper_ofs[flux].keys() if k != metric]
+                            new_ofs = []
+                            # go over each expression in the ofs list and replace existing expressions
+                            # with Python valid, explicit helper_ofs references
+                            ofs = metrics[metric]
+                            for expr in ofs:
+                                new_expr = expr
+                                for k in existing_keys:
+                                    pattern = rf'\b{re.escape(k)}\b'
+                                    replacement = f"helper_ofs['{flux}']['{k}']"
+                                    new_expr = re.sub(pattern, replacement, new_expr)
+                                new_ofs.append(new_expr)
+
+                            for of in new_ofs: # a list of objective functions 
+                                result = eval(of)
+                                helper_ofs[flux][metric] = result
+
+            elif 'custom' in flux:
+                for flux, metrics in fluxes.items():
+                    # define empty sims and obs dictionaries - based on chosen `flux`
+                    sims = {}
+                    obs = {}
+
+                    # start populating `custom_ofs`
+                    custom_ofs[flux] = {}
+
+                    # calculate metric values for the selected flux
+                    # and metric type (e.g., kge_2012, etc.)
+                    for metric in metrics.keys():
+                        custom_ofs[flux][metric] = []
+
+                        # because this helper function will be based on those already defined
+                        # in helper_ofs[flux].keys(), we will do some string adjustments
+                        # to assure evaluation goes well
+                        # replace any existing custom_ofs[flux] keys in the
+                        # expression strings with explicit custom_ofs references
+                        existing_keys = [k for k in custom_ofs[flux].keys() if k != metric]
+                        new_ofs = []
+                        # go over each expression in the ofs list and replace existing expressions
+                        # with Python valid, explicit custom_ofs references
+                        ofs = list(metrics[metric])
+                        for expr in ofs:
+                            new_expr = expr
+                            for k in existing_keys:
+                                pattern = rf'\b{re.escape(k)}\b'
+                                replacement = f"helper_ofs['{flux}']['{k}']"
+                                new_expr = re.sub(pattern, replacement, new_expr)
+                            new_ofs.append(new_expr)
+
+                        for idx, of in enumerate(new_ofs, start=1): # a list of objective functions 
+                            result = eval(of)
+                            custom_ofs[flux][metric] = result
+
+                            # write the of results to a .csv file (with only a single element)
+                            with open(
+                                os.path.join(
+                                    './etc',
+                                    'eval',
+                                    f'{group}_{flux.upper()}_{metric}_{idx}.csv',
+                                ),
+                                'w',
+                            ) as f:
+                                f.write(f'{result}')
+
+            # just normal fluxed-based objective functions using hydroerr metrics
+            else:
+                for flux, metrics in fluxes.items():
+                    sims = {}
+                    obs = {}
+                    # start populating of_values
+                    of_values[flux] = {}
+                    # assign simulation results for the selected flux
+                    for st in station_ids:
+                        # sims dictionary
+                        sims[obs_sub['name'].sel(subbasin=st).to_numpy().tolist()] = sim_sub[flux].sel(subbasin=st).to_series()
+                        # same for obs dictionary
+                        obs[obs_sub['name'].sel(subbasin=st).to_numpy().tolist()] = obs_sub[flux].sel(subbasin=st).to_series()
+                    # metric (for example, kge_2012), and ofs (list of individual objective functions
+                    for metric, ofs in metrics.items():
+                        # add elements to `of_values`
+                        of_values[flux][metric] = []
+                        # calculate the metric value
+                        he_metric = getattr(HydroErr, metric)
+                        metric_dict = {}
+                        for name in obs.keys():
+                            metric_dict[name] = he_metric(sims[name], obs[name])
+
+                        for idx, of in enumerate(ofs, start=1): # a list of objective functions
+                            result = ne.evaluate(of, local_dict=metric_dict)
+                            of_values[flux][metric] = result
+
+                            # write the of results to a .csv file (with only a single element)
+                            with open(
+                                os.path.join(
+                                    './etc',
+                                    'eval',
+                                    f'{group}_{flux.upper()}_{metric}_{idx}.csv',
+                                ),
+                                'w',
+                            ) as f:
+                                f.write(f'{result}')
 
     except subprocess.CalledProcessError as e:
         warnings.warn(
             f'MODEL EXECUTION FAILED WITH ERROR CODE {e.returncode}. '
             'OBJECTIVE FUNCTION VALUES WILL BE SET TO A LARGE NUMBER.'
         )
-        for flux, metrics in eval_config.get('objective_functions').items():
-            for metric, ofs in metrics.items():
-                for idx, of in enumerate(ofs, start=1): # a list of objective functions
-                    # FIXME: Only coding for OSTRICH now, since Ostrich is always
-                    #        dealing with a minimization problem, reporting a large
-                    #        value for failed runs.
-                    result = +1e10
+        for group, fluxes in eval_config.get('objective_functions').items():
+            if any(keyword in group for keyword in ['flux', 'custom']):
+                for flux in fluxes.keys():
+                    for idx, metric in enumerate(fluxes[flux].keys(), start=1):
+                        result = +1e10
 
-                    # write the of results to a .csv file (with only a single element)
-                    with open(
-                        os.path.join(
-                            './etc',
-                            'eval',
-                            f'{flux.upper()}_{metric}_{idx}.csv',
-                        ),
-                        'w',
-                    ) as f:
-                        f.write(f'{result}')
+                        # write the of results to a .csv file (with only a single element)
+                        with open(
+                            os.path.join(
+                                './etc',
+                                'eval',
+                                f'{group}_{flux.upper()}_{metric}_{idx}.csv',
+                            ),
+                            'w',
+                        ) as f:
+                            f.write(f'{result}')
 
     except (ValueError, TypeError, KeyError) as e:
         warnings.warn(
             f'MODEL OUTPUT CORRUPTED: {str(e)}. '
             'OBJECTIVE FUNCTION VALUES WILL BE SET TO A LARGE NUMBER.'
         )
-        for flux, metrics in eval_config.get('objective_functions').items():
-            for metric, ofs in metrics.items():
-                for idx, of in enumerate(ofs, start=1): # a list of objective functions
-                    # FIXME: Only coding for OSTRICH now, since Ostrich is always
-                    #        dealing with a minimization problem, reporting a large
-                    #        value for failed runs.
-                    result = +1e10
+        for group, fluxes in eval_config.get('objective_functions').items():
+            if any(keyword in group for keyword in ['flux', 'custom']):
+                for flux in fluxes.keys():
+                    for idx, metric in enumerate(fluxes[flux].keys(), start=1):
+                        result = +1e10
 
-                    # write the of results to a .csv file (with only a single element)
-                    with open(
-                        os.path.join(
-                            './etc',
-                            'eval',
-                            f'{flux.upper()}_{metric}_{idx}.csv',
-                        ),
-                        'w',
-                    ) as f:
-                        f.write(f'{result}')
+                        # write the of results to a .csv file (with only a single element)
+                        with open(
+                            os.path.join(
+                                './etc',
+                                'eval',
+                                f'{group}_{flux.upper()}_{metric}_{idx}.csv',
+                            ),
+                            'w',
+                        ) as f:
+                            f.write(f'{result}')

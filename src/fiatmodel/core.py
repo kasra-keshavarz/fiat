@@ -168,6 +168,27 @@ class Calibration(object):
         self.model_config = model_config
         self._obs = observations
 
+        # determine involved fluxes (or state variables) for calibration
+        fluxes = []
+        keyword_group = ['helper', 'custom', 'flux', 'state', 'state_variable']
+        if self.calibration_config is not None:
+            for group, group_dict in self.calibration_config.get('objective_functions', {}).items():
+                if any(keyword in group for keyword in keyword_group):
+                    for flux in group_dict.keys():
+                        if flux not in fluxes:
+                            fluxes.append(flux)
+                else:
+                    raise ValueError(
+                        f"Unknown objective function group '{group}' in"
+                         " `calibration_config['objective_functions']`. ")
+
+        # if no fluxes are defined, issue a warning
+        if len(fluxes) == 0:
+            raise ValueError(
+                "No fluxes defined in `calibration_config['objective_functions']`. "
+                "At least one flux or state variable must be specified for calibration."
+            )
+
         # build the model-specific object
         match self.model_software:
             case 'mesh':
@@ -175,7 +196,7 @@ class Calibration(object):
                 self.model = MESH(
                     config=self.model_config,
                     calibration_software=self.calibration_software,
-                    fluxes=self.calibration_config.get('objective_functions').keys(),
+                    fluxes=fluxes,
                     dates=self.calibration_config.get('dates'),
                     spinup=self.calibration_config.get('spinup_start'),
                 )
@@ -630,11 +651,11 @@ class Calibration(object):
             'objective_functions': self.calibration_config.get('objective_functions'),
             'results_path': 'results',
             'output_files': [self.model.outputs],
-            'observations_file': os.path.join(
+            'observations_file': os.path.abspath(os.path.join(
                 self.calibration_config.get('instance_path'),
                 'observations',
                 'observations.nc'
-            ),
+            )),
             # based on the calibration_software.templating.py engines, the 
             # `self.model.parameters.keys()` and `self.model.others.keys()`
             # are templated under:

@@ -88,13 +88,20 @@ End{{ algorithm_name }}
 {% if objective_functions is defined and objective_functions is mapping %}
 # Response variables
 BeginResponseVars
-  # name        filename ;                                 keyword      line   col   token
-  {% for flux in objective_functions.keys() %}
-    {% for metric in objective_functions.get(flux).keys() %}
-    {# Now itearte over the elements of the cost function and see how many are available #}
-      {% for of in objective_functions.get(flux).get(metric) %}
-        {% set idx = loop.index %}
-  {{ flux }}_{{ metric }}_{{ idx }}     ./etc/eval/{{ flux }}_{{ metric }}_{{ idx }}.csv ;             OST_NULL     0      1     ','
+  # name;          filename ;                                 keyword;   line   col   token
+  {% for group in objective_functions.keys() if 'helper' not in group %}
+    {% for flux in objective_functions.get(group).keys() %}
+    {# Now iterate over the metrics and their cost function elements #}
+      {% for metric in objective_functions.get(group).get(flux).keys() %}
+        {% set metric_val = objective_functions.get(group).get(flux).get(metric) %}
+        {% if metric_val is string %}
+  {{ group }}_{{ flux }}_{{ metric }}_1     ./etc/eval/{{ group }}_{{ flux }}_{{ metric }}_1.csv ;             OST_NULL     0      1     ','
+        {% else %}
+          {% for of in metric_val %}
+            {% set idx = loop.index %}
+  {{ group }}_{{ flux }}_{{ metric }}_{{ idx }}     ./etc/eval/{{ group }}_{{ flux }}_{{ metric }}_{{ idx }}.csv ;             OST_NULL     0      1     ','
+          {% endfor %}
+        {% endif %}
       {% endfor %}
     {% endfor %}
   {% endfor %}
@@ -102,12 +109,19 @@ EndResponseVars
 
 # Objective function specs
 BeginGCOP
-  {% for flux in objective_functions.keys() %}
-    {% for metric in objective_functions.get(flux).keys() %}
-      {% for of in objective_functions.get(flux).get(metric) %}
-        {# Now itearte over the elements of the cost function and see how many are available #}
-        {% set idx = loop.index %}
-  CostFunction     {{ flux }}_{{ metric }}_{{ idx }}
+  {% for group in objective_functions.keys() if 'helper' not in group %}
+    {% for flux in objective_functions.get(group).keys() %}
+    {# Now iterate over the metrics and their cost function elements #}
+      {% for metric in objective_functions.get(group).get(flux).keys() %}
+        {% set metric_val = objective_functions.get(group).get(flux).get(metric) %}
+        {% if metric_val is string %}
+  CostFunction     {{ group }}_{{ flux }}_{{ metric }}_1
+        {% else %}
+          {% for of in metric_val %}
+            {% set idx = loop.index %}
+  CostFunction     {{ group }}_{{ flux }}_{{ metric }}_{{ idx }}
+          {% endfor %}
+        {% endif %}
       {% endfor %}
     {% endfor %}
   {% endfor %}
@@ -118,11 +132,19 @@ EndGCOP
 {% if objective_functions is defined and objective_functions is mapping %}
 # Calculation methods for cost/objective functions
 # CalculationMethod
-  {% for flux in objective_functions.keys() %}
-    {% for metric in objective_functions.get(flux).keys() %}
-      {% for of in objective_functions.get(flux).get(metric) %}
-        {% set idx = loop.index %}
-  # {{ flux }}_{{ metric }}_{{ idx }}: {{ of }}
+  {% for group in objective_functions.keys()%}
+    {% for flux in objective_functions.get(group).keys() %}
+    {# Now iterate over the metrics and their cost function elements #}
+      {% for metric in objective_functions.get(group).get(flux).keys() %}
+        {% set metric_val = objective_functions.get(group).get(flux).get(metric) %}
+        {% if metric_val is string %}
+  # {{ group }}_{{ flux }}_{{ metric }}_1: {{ metric_val }}
+        {% else %}
+          {% for of in metric_val %}
+            {% set idx = loop.index %}
+  # {{ group }}_{{ flux }}_{{ metric }}_{{ idx }}: {{ of }}
+          {% endfor %}
+        {% endif %}
       {% endfor %}
     {% endfor %}
   {% endfor %}
