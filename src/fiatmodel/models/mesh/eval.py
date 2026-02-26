@@ -168,13 +168,27 @@ def _make_object_hook() -> Callable[[Dict[str, Any]], Dict[str, Any]]:
     -------
     callable
         A function suitable for use as ``object_hook`` in :func:`json.loads`
-        that applies :func:`_convert_numeric_strings` to every decoded mapping.
+        that applies :func:`_convert_numeric_strings` to every decoded mapping
+        and converts keys to integers where possible.
     """
 
     def object_hook(d):
+        new_d = {}
         for k, v in d.items():
-            d[k] = _convert_numeric_strings(v)  # reuse earlier function
-        return d
+            # 1. Reuse your existing function to convert values recursively
+            # Note: Since object_hook runs bottom-up, 'v' is already processed 
+            # if it was a nested dict. _convert_numeric_strings handles lists/primitives.
+            converted_val = _convert_numeric_strings(v)
+
+            # 2. Attempt to convert the key to an integer
+            try:
+                converted_key = int(k)
+            except ValueError:
+                converted_key = k
+            
+            new_d[converted_key] = converted_val
+        return new_d
+
     return object_hook
 
 def _reset_dir(path: str) -> None:
@@ -419,12 +433,26 @@ if __name__ == "__main__":
         class_case=mesh_inputs['case_entry'],
         class_info=mesh_inputs['info_entry'],
         class_grus=mesh_inputs['class']
-    )
+    )   
+
+    # extract hydrology + routing paramaters available for calibration
+    # since `routing` is a list, the first element is chosen with [0]
+    # but since `hydrology` is a dictionary, we choose the first element
+    # differently
+    first_element_hydrology = next(iter(mesh_inputs['hydrology']))
+    process_params_dict = { 
+        'process_details': {
+            'routing': list(mesh_inputs['routing'][0].keys()),
+            'hydrology': list(mesh_inputs['hydrology'][first_element_hydrology].keys()),
+        },  
+    }   
     # hydrology
     hydrology_file = mf.utility.render_hydrology_template(
         routing_params=mesh_inputs['routing'],
         hydrology_params=mesh_inputs['hydrology'],
-    )
+        **process_params_dict,
+    )   
+
     # apply changes to the MESH instance
     with open(os.path.join(eval_config['model_instance_path'], "MESH_parameters_CLASS.ini"), "w", encoding="utf-8") as f:
         f.write(class_file)
