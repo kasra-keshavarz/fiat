@@ -11,6 +11,7 @@ import re
 import os
 import shutil
 import sys
+import warnings
 
 from typing import (
     Dict,
@@ -563,10 +564,20 @@ class MESH(ModelBuilder):
         )
 
         # first, the routing dictionary
-        routing_df = pd.read_csv(StringIO(sections[2]), comment='#', sep='\s+', index_col=0, skiprows=1, header=None)
-        routing_df.index = routing_df.index.str.lower()
-        # we should return a list of values
-        routing_dict = [v for v in routing_df.to_dict().values()]
+        try:
+            routing_df = pd.read_csv(StringIO(sections[2]), comment='#', sep='\s+', index_col=0, skiprows=1, header=None)
+            routing_df.index = routing_df.index.str.lower()
+
+            # we should return a list of values
+            routing_dict = [v for v in routing_df.to_dict().values()]
+
+        except pd.errors.EmptyDataError:
+            warnings.warn(f"The routing section in MESH_parameters_hydrology.ini"
+                          " is empty. Reading `MESH_parameters.nc` file.")
+            routing_ds = xr.open_dataset(os.path.join(self.config['instance_path'], 'MESH_parameters.nc'))
+            routing_df = routing_ds[['flz', 'pwr']].to_dataframe().T.to_dict()
+
+            routing_dict = [v for v in routing_df.values()]
 
         # and second, the hydrology dictionary
         hydrology_df = pd.read_csv(StringIO(sections[4]), comment='#', sep='\s+', index_col=0, skiprows=2, header=None)
