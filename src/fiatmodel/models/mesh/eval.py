@@ -424,8 +424,12 @@ if __name__ == "__main__":
             mesh_inputs[param_name] = json.load(f, object_hook=_make_object_hook())
     # doing the same for the `others` files
     for other_name, file_path in others_file_paths.items():
-        with open(file_path, 'r', encoding='utf-8') as f:
-            mesh_inputs[other_name] = json.load(f, object_hook=_make_object_hook())
+        ext = os.path.splitext(file_path)[-1].lower()
+        if ext == '.json':
+            with open(file_path, 'r', encoding='utf-8') as f:
+                mesh_inputs[other_name] = json.load(f, object_hook=_make_object_hook())
+        else:
+            pass # probably `.nc` or others
 
     # use meshflow to generate the parameter files
     # class
@@ -440,17 +444,28 @@ if __name__ == "__main__":
     # but since `hydrology` is a dictionary, we choose the first element
     # differently
     first_element_hydrology = next(iter(mesh_inputs['hydrology']))
-    process_params_dict = { 
+    kwargs: dict[str | Any] = { 
         'process_details': {
             'routing': list(mesh_inputs['routing'][0].keys()),
             'hydrology': list(mesh_inputs['hydrology'][first_element_hydrology].keys()),
         },  
-    }   
+    }
+
+    # read the `MESH_parameters.nc` file as well, if provided
+    if eval_config['others']['parameters_ds']:
+        mesh_parameters_path = os.path.join(root_file_path, eval_config['others']['parameters_ds'])
+        mesh_parameters_ds = xr.open_dataset(mesh_parameters_path)
+
+        # add mesh_parameters_ds to `kwargs` so it can be used in the template rendering
+        kwargs['parameters_ds'] = mesh_parameters_ds
+
     # hydrology
     hydrology_file = mf.utility.render_hydrology_template(
         routing_params=mesh_inputs['routing'],
         hydrology_params=mesh_inputs['hydrology'],
-        **process_params_dict,
+        hru_dim='subbasin', # hard-coded: FIXME later
+        gru_dim='NGRU', # hard-coded: FIXME later
+        **kwargs,
     )   
 
     # apply changes to the MESH instance

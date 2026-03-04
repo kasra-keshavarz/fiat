@@ -17,6 +17,8 @@ import re
 import os
 import sys
 
+import xarray as xr
+
 # NameType type alias for parameter names
 NameType = Union[str, int, float]
 
@@ -635,6 +637,31 @@ def param_name_gen(
     param_name = '_' + _unit.upper() + _name.upper()
     
     return param_name
+
+def parse_parameters_nc(
+    nc_file: os.PathLike | str,
+) -> Dict[str, float]:
+    """Parse a netCDF file containing MESH parameters, namely
+    `MESH_parameters.nc`.
+
+    Parameters
+    ----------
+    nc_file : path-like
+        File path to the netCDF file with MESH parameters.
+
+    Returns
+    -------
+    params_ds : xarray.Dataset
+        Dataset containing basic parameter values keyed by variable names.
+    """
+    ds = xr.open_dataset(nc_file)
+
+    # drop all variables expect for the following, if available
+    expected_vars = ['lat', 'lon', 'crs', 'subbaisn', 'NGRU', 'nsol', 'nvf', 'ncan']
+
+    params_ds = ds[[var for var in expected_vars if var in ds]]
+
+    return params_ds
 
 def replace_prefix_in_last_two_lines(
     path: PathLike,

@@ -134,9 +134,19 @@ class MESH(ModelBuilder):
             'MESH_parameters_CLASS.ini',
             'MESH_parameters_hydrology.ini',
             ]
+
+        # if `executable` is provided in the config, we can also
+        # add it to the required files
+        if 'executable' in self.config:
+            self.required_files.append(self.config['executable'])
+
         # build MESH-specific required directories
         self.required_dirs = [
             'results',
+        ]
+        # MESH optional files
+        self.optional_files = [
+            'MESH_parameters.nc',
         ]
         # time-stamp string for backups
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -585,6 +595,10 @@ class MESH(ModelBuilder):
         # and we return a dictionary of this
         hydrology_dict = hydrology_df.to_dict()
 
+        # if the `MESH_parameters.nc` file exists, we can also
+        # read the hydrology parameters from there
+
+
         return routing_dict, hydrology_dict
 
     def analyze(self, cache: PathLike = None) -> None:
@@ -624,8 +638,19 @@ class MESH(ModelBuilder):
         }
 
         self.others = {
-            'case_entry': case_entry,
-            'info_entry': info_entry,
+            'case_entry': {
+                'type': 'json',
+                'data': case_entry,
+            },
+            'info_entry': {
+                'type': 'json',
+                'data': info_entry,
+            },
+            'parameters_ds': {
+                'type': 'nc',
+                'data': parse_parameters_nc(
+                    os.path.join(self.config['instance_path'], 'MESH_parameters.nc')),
+            },
         }
 
         # add the step logger entry

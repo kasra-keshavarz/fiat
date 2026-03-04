@@ -646,7 +646,7 @@ class Calibration(object):
             # This path is agnostic to the calibration software being used. These
             # files all must copy for each instance of model evaluation.
             'model_instance_path': './model/',
-            'model_executable': self.model_config.get('executable'),
+            'model_executable': os.path.basename(self.model_config.get('executable')),
             'dates': self.calibration_config.get('dates'),
             'objective_functions': self.calibration_config.get('objective_functions'),
             'results_path': 'results',
@@ -670,8 +670,9 @@ class Calibration(object):
             # `others` are static in each iteration but necessary to
             # be read by the script---USING `TEMPLATES` PATH
             'others': {
-                key: os.path.join('../templates', f'{key}.json')
-                         for key in self.model.others.keys()}
+                key: os.path.join('../templates', f'{key}.{self.model.others[key]["type"]}')
+                for key in self.model.others.keys()
+            }
         }
 
         # dumping the dictionary into a JSON file for the evaluation script

@@ -43,17 +43,18 @@ else:
 JSON: TypeAlias = dict[str, "JSON"] | list["JSON"] | str | int | float | bool | None
 
 class OstrichTemplateEngine(OptimizerTemplateEngine):
-    """Templating engine for MESH calibrated with Ostrich.
+    """Templating engine for calibration using Ostrich.
 
     Subclass of :class:`~fiatmodel.calibration.optimizer.OptimizerTemplateEngine`
     that renders all artifacts needed by the Ostrich backend to evaluate the
-    MESH model.
+    hydrological model.
 
     Attributes
     ----------
     template : object
         Compiled Jinja2 template for the model-specific optimizer input
-        (e.g., ``mesh.jinja2``). Type is the internal Jinja2 template object.
+        (e.g., ``mesh.jinja2`` for MESH). Type is the internal Jinja2
+        template object.
     archive_template : object
         Compiled Jinja2 template used to generate an archive script.
     environment : :class:`jinja2.Environment`
@@ -89,7 +90,7 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         config : dict
             Calibration configuration dictionary consumed by the templates.
         model : ModelBuilder
-            Model adapter instance for MESH providing parameters and paths.
+            Model adapter instance for model providing parameters and paths.
 
         Returns
         -------
@@ -262,19 +263,36 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
 
         # if `others` attribute is populated (not an empty dictionary)
         if len(self.model.others) > 0:
-            for group, params in self.model.others.items():
-                # dump JSON files for each parameter group
-                with open(
-                    os.path.join(
-                        output_path,
-                        'etc',
-                        'templates',
-                        f'{group}.json',
-                    ),
-                    'w',
-                ) as f:
-                    json_obj = json.dumps(params, indent=4)
-                    f.write(json_obj)
+            for group in self.model.others.keys():
+                dtype = self.model.others[group]['type']
+                params = self.model.others[group]['data']
+                if dtype == 'json': 
+                    # dump JSON files for each parameter group
+                    with open(
+                        os.path.join(
+                            output_path,
+                            'etc',
+                            'templates',
+                            f'{group}.json',
+                        ),
+                        'w',
+                    ) as f:
+                        json_obj = json.dumps(params, indent=4)
+                        f.write(json_obj)
+                elif dtype == 'nc':
+                    params.to_netcdf(
+                        os.path.join(
+                            output_path,
+                            'etc',
+                            'templates',
+                            f'{group}.nc',
+                        )
+                    )
+                else:
+                    raise ValueError(
+                        f"Unsupported data type `{dtype}` for `others` group "
+                        f"`{group}`. Supported types are `json` and `netcdf`."
+                    )
 
         return
 
@@ -316,6 +334,14 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
                 os.path.join(model_output_path, dir),
                 dirs_exist_ok=True,
             )
+        # go over the optional files, and if they exist, copy them as well
+        for file in self.model.optional_files:
+            src_path = os.path.join(self.model.config['instance_path'], file)
+            if os.path.exists(src_path):
+                shutil.copy(
+                    src_path,
+                    model_output_path,
+                )
 
         return
 
