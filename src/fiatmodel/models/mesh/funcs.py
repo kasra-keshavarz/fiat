@@ -149,8 +149,8 @@ def parse_class_meta_data(
 
 def determine_gru_type(
     line : str
-) -> int:
-    """Determine GRU type index from a CLASS vegetation header line.
+) -> List[int]:
+    """Determine GRU type index(es) from a CLASS vegetation header line.
 
     Parameters
     ----------
@@ -159,9 +159,11 @@ def determine_gru_type(
 
     Returns
     -------
-    int or None
-        1-based index of the first column with value ``1.000`` (or first
-        positive when fractions sum to 1); may be ``None`` if not found.
+    list[int]
+        List of 1-based column indices with non-zero FCAN values. For
+        single-vegetation GRUs this is a single-element list (e.g. ``[1]``);
+        for mixed-vegetation GRUs it contains all non-zero indices
+        (e.g. ``[1, 2, 4]``).
 
     Raises
     ------
@@ -170,32 +172,22 @@ def determine_gru_type(
     """
     tokens = line.strip().split()
     slice_len = min(5, len(tokens))
-    
-    # to track mixed GRU types and also 
-    gru_type_sum = 0
-    
-    # iterate over the first line of the vegetation parameter section
+
+    # collect all non-zero FCAN column indices (1-based)
+    non_zero_indices = []
+    gru_type_sum = 0.0
+
     for i in range(slice_len):
-        # if a distinct GRU, look for 1.000 value
-        if tokens[i] == "1.000":
-            return i + 1  # 1-based
-
-        # Calculate the sum until this for loop breaks
-        # or ends
-        gru_type_sum += float(tokens[i])
-
-    # FIXME: if sum equals to 1, then that means we deal with a mixed GRU
-    #        type, and we will have to add the relevant feature to both
-    #        MESHFlow and MESHFIAT;
-    #        For now, find the first column without non-zero value
-    if gru_type_sum == 1:
-        for i in range(slice_len):
-            if float(tokens[i]) > 0:
-                return i + 1
+        val = float(tokens[i])
+        gru_type_sum += val
+        if val > 0:
+            non_zero_indices.append(i + 1)  # 1-based
 
     # Raise an error if it is not a valid CLASS field
     if gru_type_sum == 0:
         raise ValueError("Invalid CLASS GRU type")
+
+    return non_zero_indices
 
 def parse_class_veg1(
     veg_section : str,

@@ -486,7 +486,7 @@ class MESH(ModelBuilder):
             #    3. cropland
             #    4. grassland
             #    5. urban, barren land, or imprevious area
-            section_landcover_type = determine_gru_type(
+            gru_indices = determine_gru_type(
                 line=class_section['veg1'].splitlines()[0],
             )
             # based on the number extracted above, we can name the
@@ -499,16 +499,8 @@ class MESH(ModelBuilder):
                 5: "urban",
             }
 
-            # parse the sections -- hard-coded as there are no
-            # other alternatives
-            veg1_params = parse_class_veg1(
-                veg_section=class_section['veg1'],
-                gru_idx=section_landcover_type,
-            )
-            veg2_params = parse_class_veg2(
-                veg_section=class_section['veg2'],
-                gru_idx=section_landcover_type,
-            )
+            # parse shared (non-veg) sections -- these are the same
+            # regardless of vegetation type
             hyd1_params = parse_class_hyd1(
                 hyd_line=class_section['hyd1'],
             )
@@ -528,35 +520,68 @@ class MESH(ModelBuilder):
                 prog_line=class_section['prog3'],
             )
 
-            # make a list of parameters for easier literal unpacking inside
-            # the gru_entry dictionary
-            param_list = [
-                veg1_params,
-                veg2_params,
-                hyd1_params,
-                hyd2_params,
-                soil_params,
-                prog1_params,
-                prog2_params,
-                prog3_params,
-            ]
+            # shared (non-veg) params collected for reuse
+            shared_params = {}
+            for d in [hyd1_params, hyd2_params, soil_params,
+                      prog1_params, prog2_params, prog3_params]:
+                shared_params.update(d)
 
-            # make sure to make an exception for water-like land covers
-            if 'water' in hyd2_params['mid'].lower():
-                class_type = 'water'
-            elif 'snow' in hyd2_params['mid'].lower():
-                class_type = 'water'
-            elif 'ice' in hyd2_params['mid'].lower():
-                class_type = 'water'
+            # determine water-like override from the MID descriptor
+            is_water = any(
+                kw in hyd2_params['mid'].lower()
+                for kw in ('water', 'snow', 'ice')
+            )
+
+            if len(gru_indices) == 1:
+                # Single vegetation type -- existing behavior
+                gru_idx = gru_indices[0]
+
+                veg1_params = parse_class_veg1(
+                    veg_section=class_section['veg1'],
+                    gru_idx=gru_idx,
+                )
+                veg2_params = parse_class_veg2(
+                    veg_section=class_section['veg2'],
+                    gru_idx=gru_idx,
+                )
+
+                if is_water:
+                    class_type = 'water'
+                else:
+                    class_type = class_name_dict[gru_idx]
+
+                gru_entry[idx] = {'class': class_type}
+                gru_entry[idx].update(veg1_params)
+                gru_entry[idx].update(veg2_params)
+                gru_entry[idx].update(shared_params)
+
             else:
-                class_type = class_name_dict[section_landcover_type]
+                # Mixed vegetation type -- produce a list of dicts,
+                # one per non-zero vegetation component. MESHFlow's
+                # render_class_template expects this format.
+                veg_dicts = []
+                for gru_idx in gru_indices:
+                    veg1_p = parse_class_veg1(
+                        veg_section=class_section['veg1'],
+                        gru_idx=gru_idx,
+                    )
+                    veg2_p = parse_class_veg2(
+                        veg_section=class_section['veg2'],
+                        gru_idx=gru_idx,
+                    )
 
-            # adding class type info
-            gru_entry[idx] = {
-                'class': class_type,
-            }
-            # adding parameters
-            gru_entry[idx].update({k: v for d in param_list for k, v in d.items()})
+                    if is_water:
+                        class_type = 'water'
+                    else:
+                        class_type = class_name_dict[gru_idx]
+
+                    combined = {'class': class_type}
+                    combined.update(veg1_p)
+                    combined.update(veg2_p)
+                    combined.update(shared_params)
+                    veg_dicts.append(combined)
+
+                gru_entry[idx] = veg_dicts
 
         return case_entry, info_entry, gru_entry
 
@@ -783,10 +808,20 @@ class MESH(ModelBuilder):
                 # input can be either a dictionary or a list
                 for p in unit_params.keys():
                     if isinstance(self.parameters[group_name], dict):
-                        # iterate over the parameters in the unit
-                        if p in self.parameters[group_name][unit].keys():
-                            # updating the target group dictionary
-                            self.templated_parameters[group_name][unit][p] = param_name_gen(unit, p)
+                        unit_data = self.parameters[group_name][unit]
+
+                        if isinstance(unit_data, list):
+                            # Mixed-veg GRU: iterate each veg dict
+                            for i, veg_dict in enumerate(unit_data):
+                                if p in veg_dict:
+                                    class_type = veg_dict['class']
+                                    self.templated_parameters[group_name][unit][i][p] = \
+                                        param_name_gen(unit, f"{p}_{class_type}")
+
+                        elif isinstance(unit_data, dict):
+                            # Single-veg GRU: existing behavior
+                            if p in unit_data:
+                                self.templated_parameters[group_name][unit][p] = param_name_gen(unit, p)
 
                     elif isinstance(self.parameters[group_name], list):
                         if p in self.parameters[group_name][unit - 1].keys():

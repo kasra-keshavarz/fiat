@@ -183,30 +183,57 @@ BeginParams
       {% for unit, params in param_dict.items() %}
     # Computational unit #{{ unit }} parameters
         {% for name, bounds in params.items() %}
-          {# Extract templated calibrating parameter name #}
-          {% set param_name = parameters.get(param_group).get(unit).get(name) %}
-          {# Check whether 'CLAY' or 'SAND' are included `param_name` #}
-          {# If so, we need to replace them with 'SLT' because of OSTRICH's
-            limitations in dealing with constraints #}
-          {% if 'CLAY' in param_name %}
-            {% set param_name = param_name | replace('CLAY', 'CLY') ~ '_'%}
-            {% set silt_name = param_name | replace('CLY', 'SLT') %}
+          {# Resolve the unit data — may be a dict (single-veg) or list (mixed-veg) #}
+          {% set unit_data = parameters.get(param_group).get(unit) %}
+          {% if unit_data is mapping %}
+            {# Single-veg GRU: extract param name directly #}
+            {% set param_name = unit_data.get(name) %}
+            {# Check whether 'CLAY' or 'SAND' are included `param_name` #}
+            {# If so, we need to replace them with 'SLT' because of OSTRICH's
+              limitations in dealing with constraints #}
+            {% if 'CLAY' in param_name %}
+              {% set param_name = param_name | replace('CLAY', 'CLY') ~ '_'%}
+              {% set silt_name = param_name | replace('CLY', 'SLT') %}
+                {% if silt_name not in silt.included %}
+                  {# Adding a silt parameter with fixed value of 0.0, min of 0.0, and max of 50.0 #}
+                  {% set _ = silt.included.append(silt_name) %}
+    {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
+                {% endif %}
+            {% elif 'SAND' in param_name %}
+              {% set param_name = param_name | replace('SAND', 'SND') ~ '_' %}
+              {% set silt_name = param_name | replace('SND', 'SLT') %}
               {% if silt_name not in silt.included %}
-                {# Adding a silt parameter with fixed value of 0.0, min of 0.0, and max of 50.0 #}
                 {% set _ = silt.included.append(silt_name) %}
+                {# Adding a silt parameter with fixed value of 0.0, min of 0.0, and max of 50.0 #}
     {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
               {% endif %}
-          {% elif 'SAND' in param_name %}
-            {% set param_name = param_name | replace('SAND', 'SND') ~ '_' %}
-            {% set silt_name = param_name | replace('SND', 'SLT') %}
-            {% if silt_name not in silt.included %}
-              {% set _ = silt.included.append(silt_name) %}
-              {# Adding a silt parameter with fixed value of 0.0, min of 0.0, and max of 50.0 #}
-    {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
             {% endif %}
-          {% endif %}
-          {# so far, we were able to get the parameter name #}
+            {# so far, we were able to get the parameter name #}
     {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none F7.3
+          {% elif unit_data is iterable %}
+            {# Mixed-veg GRU: iterate each veg dict in the list #}
+            {% for veg_dict in unit_data %}
+              {% if veg_dict.get(name) is string %}
+                {% set param_name = veg_dict.get(name) %}
+                {% if 'CLAY' in param_name %}
+                  {% set param_name = param_name | replace('CLAY', 'CLY') ~ '_'%}
+                  {% set silt_name = param_name | replace('CLY', 'SLT') %}
+                  {% if silt_name not in silt.included %}
+                    {% set _ = silt.included.append(silt_name) %}
+    {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
+                  {% endif %}
+                {% elif 'SAND' in param_name %}
+                  {% set param_name = param_name | replace('SAND', 'SND') ~ '_' %}
+                  {% set silt_name = param_name | replace('SND', 'SLT') %}
+                  {% if silt_name not in silt.included %}
+                    {% set _ = silt.included.append(silt_name) %}
+    {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
+                  {% endif %}
+                {% endif %}
+    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none F7.3
+              {% endif %}
+            {% endfor %}
+          {% endif %}
         {% endfor %}
 
       {% endfor %}

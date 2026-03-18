@@ -1,0 +1,9 @@
+/Users/kasrakeshavarz/Documents/github-repos/meshflow/examples/outputs/forcings/averaged_remapped_bcalgary_1980010112.nc
+/Users/kasrakeshavarz/Documents/github-repos/meshflow/examples/outputs/forcings/averaged_remapped_bcalgary_1980010212.nc
+/Users/kasrakeshavarz/Documents/github-repos/meshflow/examples/outputs/forcings/averaged_remapped_bcalgary_1980010312.nc
+/Users/kasrakeshavarz/Documents/github-repos/meshflow/examples/outputs/forcings/averaged_remapped_bcalgary_1980010412.nc
+/Users/kasrakeshavarz/Documents/github-repos/meshflow/examples/outputs/forcings/averaged_remapped_bcalgary_1980010512.nc
+/Users/kasrakeshavarz/Documents/github-repos/meshflow/examples/outputs/forcings/averaged_remapped_bcalgary_1980010612.nc
+/Users/kasrakeshavarz/Documents/github-repos/meshflow/examples/outputs/forcings/averaged_remapped_bcalgary_1980010712.nc
+/Users/kasrakeshavarz/Documents/github-repos/meshflow/examples/outputs/forcings/averaged_remapped_bcalgary_1980010812.nc
+/Users/kasrakeshavarz/Documents/github-repos/meshflow/examples/outputs/forcings/averaged_remapped_bcalgary_1980010912.nc
