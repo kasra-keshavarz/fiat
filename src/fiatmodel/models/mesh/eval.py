@@ -460,19 +460,21 @@ if __name__ == "__main__":
         kwargs['parameters_ds'] = mesh_parameters_ds
 
     # hydrology
-    hydrology_file = mf.utility.render_hydrology_template(
+    hydrology_file, parameters_ds = mf.utility.render_hydrology_template(
         routing_params=mesh_inputs['routing'],
         hydrology_params=mesh_inputs['hydrology'],
         hru_dim='subbasin', # hard-coded: FIXME later
         gru_dim='NGRU', # hard-coded: FIXME later
+        return_ds=True,
         **kwargs,
-    )   
+    )
 
     # apply changes to the MESH instance
     with open(os.path.join(eval_config['model_instance_path'], "MESH_parameters_CLASS.ini"), "w", encoding="utf-8") as f:
         f.write(class_file)
     with open(os.path.join(eval_config['model_instance_path'], "MESH_parameters_hydrology.ini"), "w", encoding="utf-8") as f:
         f.write(hydrology_file)
+    parameters_ds.to_netcdf(os.path.join(eval_config['model_instance_path'], "MESH_parameters.nc"))
 
     # run the MESH model
     try:
