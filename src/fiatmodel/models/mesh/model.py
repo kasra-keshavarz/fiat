@@ -488,6 +488,7 @@ class MESH(ModelBuilder):
             #    5. urban, barren land, or imprevious area
             gru_indices = determine_gru_type(
                 line=class_section['veg1'].splitlines()[0],
+                fallback_line=class_section['veg1'].splitlines()[1],
             )
             # based on the number extracted above, we can name the
             # GRU class

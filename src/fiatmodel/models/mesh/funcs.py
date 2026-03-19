@@ -148,19 +148,24 @@ def parse_class_meta_data(
     return info_entry, case_entry
 
 def determine_gru_type(
-    line : str
+    line : str,
+    fallback_line : str = None,
 ) -> List[int]:
     """Determine GRU type index(es) from a CLASS vegetation header line.
 
     Parameters
     ----------
     line : str
-        Whitespace-separated line containing GRU fractions and descriptors.
+        Whitespace-separated line containing GRU fractions and descriptors
+        (typically the FCAN line).
+    fallback_line : str, optional
+        A second line (e.g. LNZ0) to inspect when *line* has all-zero
+        values in the first 5 cells.
 
     Returns
     -------
     list[int]
-        List of 1-based column indices with non-zero FCAN values. For
+        List of 1-based column indices with non-zero values. For
         single-vegetation GRUs this is a single-element list (e.g. ``[1]``);
         for mixed-vegetation GRUs it contains all non-zero indices
         (e.g. ``[1, 2, 4]``).
@@ -168,7 +173,8 @@ def determine_gru_type(
     Raises
     ------
     ValueError
-        If the line does not represent a valid CLASS GRU type (sum is 0).
+        If neither *line* nor *fallback_line* contain a non-zero value
+        in the first 5 cells.
     """
     tokens = line.strip().split()
     slice_len = min(5, len(tokens))
@@ -183,11 +189,23 @@ def determine_gru_type(
         if val > 0:
             non_zero_indices.append(i + 1)  # 1-based
 
-    # Raise an error if it is not a valid CLASS field
-    if gru_type_sum == 0:
-        raise ValueError("Invalid CLASS GRU type")
+    if gru_type_sum > 0:
+        return non_zero_indices
 
-    return non_zero_indices
+    # FCAN is all zeros — fall back to the second line if provided
+    if fallback_line is not None:
+        fb_tokens = fallback_line.strip().split()
+        fb_slice_len = min(5, len(fb_tokens))
+
+        fb_indices = []
+        for i in range(fb_slice_len):
+            if float(fb_tokens[i]) != 0:
+                fb_indices.append(i + 1)  # 1-based
+
+        if fb_indices:
+            return fb_indices
+
+    raise ValueError("Invalid CLASS GRU type")
 
 def parse_class_veg1(
     veg_section : str,
