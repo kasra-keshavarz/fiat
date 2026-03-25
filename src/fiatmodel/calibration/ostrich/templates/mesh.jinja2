@@ -211,28 +211,58 @@ BeginParams
             {# so far, we were able to get the parameter name #}
     {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none F7.3
           {% elif unit_data is iterable %}
-            {# Mixed-veg GRU: iterate each veg dict in the list #}
-            {% for veg_dict in unit_data %}
-              {% if veg_dict.get(name) is string %}
-                {% set param_name = veg_dict.get(name) %}
-                {% if 'CLAY' in param_name %}
-                  {% set param_name = param_name | replace('CLAY', 'CLY') ~ '_'%}
-                  {% set silt_name = param_name | replace('CLY', 'SLT') %}
-                  {% if silt_name not in silt.included %}
-                    {% set _ = silt.included.append(silt_name) %}
+            {# Mixed-veg GRU: unit_data is a list of veg dicts #}
+            {% if bounds is mapping %}
+              {# Veg-specific param: bounds is {class_name: [min, max]} #}
+              {% for veg_dict in unit_data %}
+                {% set class_type = veg_dict.get('class') %}
+                {% if class_type in bounds and veg_dict.get(name) is string %}
+                  {% set class_bounds = bounds[class_type] %}
+                  {% set param_name = veg_dict.get(name) %}
+                  {% if 'CLAY' in param_name %}
+                    {% set param_name = param_name | replace('CLAY', 'CLY') ~ '_'%}
+                    {% set silt_name = param_name | replace('CLY', 'SLT') %}
+                    {% if silt_name not in silt.included %}
+                      {% set _ = silt.included.append(silt_name) %}
     {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
-                  {% endif %}
-                {% elif 'SAND' in param_name %}
-                  {% set param_name = param_name | replace('SAND', 'SND') ~ '_' %}
-                  {% set silt_name = param_name | replace('SND', 'SLT') %}
-                  {% if silt_name not in silt.included %}
-                    {% set _ = silt.included.append(silt_name) %}
+                    {% endif %}
+                  {% elif 'SAND' in param_name %}
+                    {% set param_name = param_name | replace('SAND', 'SND') ~ '_' %}
+                    {% set silt_name = param_name | replace('SND', 'SLT') %}
+                    {% if silt_name not in silt.included %}
+                      {% set _ = silt.included.append(silt_name) %}
     {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
+                    {% endif %}
                   {% endif %}
+    {{ param_name }}  {{ class_bounds[0] }}   {{ class_bounds[0] }}   {{ class_bounds[1] }} none none none F7.3
                 {% endif %}
+              {% endfor %}
+            {% else %}
+              {# GRU-level param: bounds is [min, max], find first templated veg_dict #}
+              {% set ns_gru = namespace(emitted=false) %}
+              {% for veg_dict in unit_data %}
+                {% if not ns_gru.emitted and veg_dict.get(name) is string %}
+                  {% set ns_gru.emitted = true %}
+                  {% set param_name = veg_dict.get(name) %}
+                  {% if 'CLAY' in param_name %}
+                    {% set param_name = param_name | replace('CLAY', 'CLY') ~ '_'%}
+                    {% set silt_name = param_name | replace('CLY', 'SLT') %}
+                    {% if silt_name not in silt.included %}
+                      {% set _ = silt.included.append(silt_name) %}
+    {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
+                    {% endif %}
+                  {% elif 'SAND' in param_name %}
+                    {% set param_name = param_name | replace('SAND', 'SND') ~ '_' %}
+                    {% set silt_name = param_name | replace('SND', 'SLT') %}
+                    {% if silt_name not in silt.included %}
+                      {% set _ = silt.included.append(silt_name) %}
+    {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
+                    {% endif %}
+                  {% endif %}
     {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none F7.3
-              {% endif %}
-            {% endfor %}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
           {% endif %}
         {% endfor %}
 
@@ -297,9 +327,29 @@ BeginTiedParams
     # Computational unit #{{ unit }} constraints
     # Soil layer #{{ layer_num }}
                 {# Now, having a list of parameters for which we will defined constraints #}
+                {# Resolve unit_data — may be a dict (single-veg) or list (mixed-veg) #}
+                {% set unit_data_c = parameters.get(constraint_group).get(unit) %}
+                {% if unit_data_c is mapping %}
+                  {% set clay_val = unit_data_c.get('clay' ~ layer_num) %}
+                  {% set sand_val = unit_data_c.get('sand' ~ layer_num) %}
+                {% elif unit_data_c is iterable %}
+                  {# Mixed-veg GRU: soil params are GRU-level, templated in the first veg_dict #}
+                  {% set ns_clay = namespace(val=none) %}
+                  {% set ns_sand = namespace(val=none) %}
+                  {% for veg_dict in unit_data_c %}
+                    {% if ns_clay.val is none and veg_dict.get('clay' ~ layer_num) is defined %}
+                      {% set ns_clay.val = veg_dict.get('clay' ~ layer_num) %}
+                    {% endif %}
+                    {% if ns_sand.val is none and veg_dict.get('sand' ~ layer_num) is defined %}
+                      {% set ns_sand.val = veg_dict.get('sand' ~ layer_num) %}
+                    {% endif %}
+                  {% endfor %}
+                  {% set clay_val = ns_clay.val %}
+                  {% set sand_val = ns_sand.val %}
+                {% endif %}
                 {% set layer_params = {
-                  'clay' ~ layer_num: parameters.get(constraint_group).get(unit).get('clay' ~ layer_num),
-                  'sand' ~ layer_num: parameters.get(constraint_group).get(unit).get('sand' ~ layer_num),
+                  'clay' ~ layer_num: clay_val,
+                  'sand' ~ layer_num: sand_val,
                   'silt' ~ layer_num: '_' ~ unit ~ 'SILT' ~ layer_num,
                   }
                 %}

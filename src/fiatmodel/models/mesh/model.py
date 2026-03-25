@@ -12,6 +12,7 @@ import os
 import shutil
 import sys
 import warnings
+import copy
 
 from typing import (
     Dict,
@@ -794,12 +795,24 @@ class MESH(ModelBuilder):
         # given the parameter bounds in self.config['parameter_bounds'],
         # the necessary parameter dictionaries are templated and saved
 
+        # --- normalize list-of-dicts bounds for mixed-veg GRUs ----------
+        # Users may supply a list of dicts (each with a 'class' key) for
+        # mixed-veg GRUs.  Normalize them into a single dict where veg
+        # params map to {class_name: [min, max]} and GRU-level params map
+        # to [min, max] (widest range across all dicts).
+        normalized_bounds = copy.deepcopy(self.config['parameter_bounds'])
+        if 'class' in normalized_bounds:
+            for unit, unit_bounds in normalized_bounds['class'].items():
+                if isinstance(unit_bounds, list):
+                    normalized_bounds['class'][unit] = \
+                        normalize_mixed_veg_bounds(unit_bounds)
+
         # initialize the `templated_parameters` dictionary
         self.templated_parameters = self.parameters.copy()
 
         # define parameter names that will be involved
         # in the calibration process
-        for group_name, group in self.config['parameter_bounds'].items():
+        for group_name, group in normalized_bounds.items():
             # building the templated_parameters dictionary
             # for each parameter group in the `parameters` dictionary
             for unit in group.keys():
@@ -807,17 +820,27 @@ class MESH(ModelBuilder):
                 # update the values of parameters in each unit
                 unit_params = group[unit]
                 # input can be either a dictionary or a list
-                for p in unit_params.keys():
+                for p, bounds in unit_params.items():
                     if isinstance(self.parameters[group_name], dict):
                         unit_data = self.parameters[group_name][unit]
 
                         if isinstance(unit_data, list):
-                            # Mixed-veg GRU: iterate each veg dict
-                            for i, veg_dict in enumerate(unit_data):
-                                if p in veg_dict:
+                            # Mixed-veg GRU: unit_data is a list of veg dicts
+                            if isinstance(bounds, dict):
+                                # Veg-specific param: bounds is {class_name: [min, max]}
+                                for i, veg_dict in enumerate(unit_data):
                                     class_type = veg_dict['class']
-                                    self.templated_parameters[group_name][unit][i][p] = \
-                                        param_name_gen(unit, f"{p}_{class_type}")
+                                    if class_type in bounds and p in veg_dict:
+                                        self.templated_parameters[group_name][unit][i][p] = \
+                                            param_name_gen(unit, f"{p}_{class_type}")
+                            else:
+                                # GRU-level param: bounds is [min, max]
+                                # Template in the first veg dict that contains it
+                                for i, veg_dict in enumerate(unit_data):
+                                    if p in veg_dict:
+                                        self.templated_parameters[group_name][unit][i][p] = \
+                                            param_name_gen(unit, p)
+                                        break
 
                         elif isinstance(unit_data, dict):
                             # Single-veg GRU: existing behavior
@@ -834,7 +857,7 @@ class MESH(ModelBuilder):
                             "The parameter bounds for each computational unit "
                             "must be provided as a dictionary or a list."
                         )
-        # define parameter bounds
-        self.parameter_bounds = self.config['parameter_bounds']
+        # define parameter bounds (normalized form)
+        self.parameter_bounds = normalized_bounds
 
         return

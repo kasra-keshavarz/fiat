@@ -30,6 +30,57 @@ if sys.version_info >= (3, 10):
 else:
     PathLike = Union[str, Path]
 
+# Vegetation-specific CLASS parameters (per-column in the CLASS file).
+# All other CLASS parameters are GRU-level (shared across vegetation types).
+_CLASS_VEG_PARAMS = frozenset([
+    'fcan', 'lamx', 'lnz0', 'lamn', 'alvc', 'cmas', 'alic', 'root',
+    'rsmn', 'qa50', 'vpda', 'vpdb', 'psga', 'psgb',
+])
+
+
+def normalize_mixed_veg_bounds(bounds_list):
+    """Normalize a list-of-dicts parameter bounds for a mixed-veg GRU.
+
+    Each dict in *bounds_list* must contain a ``'class'`` key identifying the
+    vegetation type.  Vegetation-specific parameters get per-class bounds::
+
+        {"fcan": {"needleleaf": [0.1, 0.8], "broadleaf": [0.2, 0.9]}}
+
+    GRU-level parameters are merged to the widest range across all dicts::
+
+        {"sdep": [0.5, 4.0]}
+
+    Parameters
+    ----------
+    bounds_list : list[dict]
+        Each element is ``{'class': '<name>', '<param>': [min, max], ...}``.
+
+    Returns
+    -------
+    dict
+        Normalized bounds mapping consumed by ``MESH.prepare()``.
+    """
+    normalized = {}
+
+    for bounds_dict in bounds_list:
+        class_name = bounds_dict['class']
+        for param, bnd in bounds_dict.items():
+            if param == 'class':
+                continue
+            if param in _CLASS_VEG_PARAMS:
+                # veg-specific: store per-class
+                normalized.setdefault(param, {})[class_name] = bnd
+            else:
+                # GRU-level: widen to the union of all provided ranges
+                if param not in normalized:
+                    normalized[param] = list(bnd)
+                else:
+                    normalized[param][0] = min(normalized[param][0], bnd[0])
+                    normalized[param][1] = max(normalized[param][1], bnd[1])
+
+    return normalized
+
+
 def remove_comments(
     string
 ) -> str:
