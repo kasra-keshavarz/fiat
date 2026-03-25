@@ -19,6 +19,20 @@ Load the framework
 Define parameter bounds
 -----------------------
 
+Parameter bounds define the search space for the optimizer. Each parameter
+group (``class``, ``hydrology``, ``routing``) maps integer computational-unit
+identifiers to dictionaries of ``{parameter_name: [min, max]}``.
+
+For the ``class`` group, integer keys are GRU identifiers (1-based, matching
+the order of GRU blocks in ``MESH_parameters_CLASS.ini``). For ``hydrology``,
+keys are also GRU identifiers. For ``routing``, keys are river class
+identifiers (1-based, maximum 5).
+
+**Single-vegetation GRUs**
+
+When each GRU contains a single vegetation type, bounds are specified as
+a flat dictionary:
+
 .. code-block:: python
 
    # defining MESH calibration parameter bounds
@@ -62,6 +76,53 @@ Define parameter bounds
            'r1n': [0.001, 2.0]
        },
    }
+
+**Mixed-vegetation GRUs**
+
+If a GRU contains multiple vegetation types (e.g., a mixed-forest tile with
+needleleaf and broadleaf), use a list of dictionaries instead. Each dictionary
+must include a ``'class'`` key to identify the vegetation type:
+
+.. code-block:: python
+
+   # mixed-vegetation GRU example
+   class_dict_bounds = {
+       # GRU 1: single vegetation type (standard format)
+       1: {
+           'sdep': [0.5, 4.0],
+       },
+       # GRU 4: mixed vegetation (needleleaf + broadleaf)
+       4: [
+           {
+               'class': 'needleleaf',
+               'fcan': [0.1, 0.8],
+               'lnz0': [-5.0, 1.0],
+               'sdep': [0.5, 4.0],
+           },
+           {
+               'class': 'broadleaf',
+               'fcan': [0.2, 0.9],
+               'lnz0': [-3.0, 2.0],
+               'sdep': [1.0, 3.0],
+           },
+       ],
+   }
+
+In this example:
+
+- ``fcan`` and ``lnz0`` are vegetation-specific parameters, so each
+  vegetation type gets its own calibration bounds and optimizer parameter
+  (e.g., ``_4FCAN_NEEDLELEAF`` and ``_4FCAN_BROADLEAF``).
+- ``sdep`` is a GRU-level parameter (shared across all vegetation types in
+  the GRU). Since it appears in both dictionaries, FIAT merges the bounds
+  to the widest range: ``min(0.5, 1.0) = 0.5`` and ``max(4.0, 3.0) = 4.0``,
+  producing a single optimizer parameter ``_4SDEP`` with bounds
+  ``[0.5, 4.0]``.
+
+The vegetation-specific parameters recognized by MESH/CLASS are: ``fcan``,
+``lamx``, ``lnz0``, ``lamn``, ``alvc``, ``cmas``, ``alic``, ``root``,
+``rsmn``, ``qa50``, ``vpda``, ``vpdb``, ``psga``, and ``psgb``. All other
+parameters (soil, hydrology, prognostic) are GRU-level.
 
 Load observations
 -----------------

@@ -153,15 +153,120 @@ bounds.
 - ``parameter_bounds``: dictionary defining the search space per parameter
   group. The schema of this dictionary is dependant on the hydrological model
   of choice. For example, expected keys for the MESH model include:
-  
-  - ``"class"``: mapping MESH GRU to ``{param_name: [min, max]}``
-  - ``"hydrology"``: mapping MESH GRU to ``{param_name: [min, max]}``
-  - ``"routing"``: mapping MESH river class to ``{param_name: [min, max]}``
-  As can be seen, for the ``class`` and ``hydrology`` groups, the integer keys
+
+  - ``"class"``: mapping MESH GRU to parameter bounds
+  - ``"hydrology"``: mapping MESH GRU to parameter bounds
+  - ``"routing"``: mapping MESH river class to parameter bounds
+
+  For the ``class`` and ``hydrology`` groups, the integer keys
   reference MESH GRU identifiers, as the base computational unit, while for the
   ``routing`` group, the integer keys typically reference river class identifiers.
   For more information, refer to the `MESH model documentation <https://mesh-model.atlassian.net/wiki/spaces/USER/overview?mode=global>`_
   and the `MESHFlow workflow guide <https://mesh-workflow.readthedocs.io/en/latest/>`_.
+
+  **Standard format (single-vegetation GRU)**
+
+  When each GRU represents a single vegetation type, the bounds for each
+  computational unit are a flat dictionary mapping parameter names to
+  ``[min, max]`` pairs:
+
+  .. code-block:: python
+
+     "parameter_bounds": {
+         "class": {
+             1: {"sdep": [0.5, 4.0], "fcan": [0.1, 1.0]},
+             2: {"lnz0": [-5.0, 1.0]},
+         },
+         "hydrology": {
+             1: {"zsnl": [0.03, 0.6]},
+         },
+         "routing": {
+             1: {"r1n": [0.001, 2.0], "r2n": [0.001, 2.0]},
+         },
+     }
+
+  Here, ``1`` and ``2`` under ``"class"`` are GRU identifiers (1-based integers,
+  matching the order of GRU blocks in ``MESH_parameters_CLASS.ini``). Each
+  parameter name (e.g., ``"sdep"``, ``"fcan"``) maps to its lower and upper
+  calibration bounds.
+
+  **Mixed-vegetation format (multiple vegetation types per GRU)**
+
+  A single GRU can contain multiple vegetation types (e.g., needleleaf and
+  broadleaf forest coexisting in a mixed-forest tile). In this case, replace
+  the flat dictionary with a **list of dictionaries**, where each dictionary
+  represents one vegetation component and must include a ``"class"`` key
+  identifying its type:
+
+  .. code-block:: python
+
+     "class": {
+         4: [
+             {
+                 "class": "needleleaf",
+                 "fcan": [0.1, 0.8],
+                 "lnz0": [-5.0, 1.0],
+                 "sdep": [0.5, 4.0],
+             },
+             {
+                 "class": "broadleaf",
+                 "fcan": [0.2, 0.9],
+                 "lnz0": [-3.0, 2.0],
+                 "sdep": [1.0, 3.0],
+             },
+         ],
+     }
+
+  The ``"class"`` key must match the vegetation type name used by MESH/CLASS
+  (e.g., ``"needleleaf"``, ``"broadleaf"``, ``"crop"``, ``"grassland"``,
+  ``"urban"``).
+
+  Parameters in CLASS fall into two categories, which are handled differently:
+
+  - **Vegetation-specific parameters** (``fcan``, ``lamx``, ``lnz0``, ``lamn``,
+    ``alvc``, ``cmas``, ``alic``, ``root``, ``rsmn``, ``qa50``, ``vpda``,
+    ``vpdb``, ``psga``, ``psgb``): these are tied to a specific vegetation
+    column in the CLASS file. Each dictionary in the list provides independent
+    bounds for its vegetation type. In the example above, ``fcan`` is calibrated
+    with bounds ``[0.1, 0.8]`` for needleleaf and ``[0.2, 0.9]`` for broadleaf,
+    producing two separate optimizer parameters (e.g., ``_4FCAN_NEEDLELEAF``
+    and ``_4FCAN_BROADLEAF``).
+
+  - **GRU-level parameters** (e.g., ``sdep``, ``sand1``, ``clay1``, ``drn``,
+    and all other soil, hydrology, and prognostic parameters): these apply to
+    the entire GRU regardless of vegetation type. If the same GRU-level
+    parameter appears in multiple dictionaries in the list, FIAT takes the
+    **widest range** (union) across all provided bounds --- i.e., the minimum
+    of the lower bounds and the maximum of the upper bounds. In the example
+    above, ``sdep`` appears in both dicts with bounds ``[0.5, 4.0]`` and
+    ``[1.0, 3.0]``, so the effective calibration range becomes ``[0.5, 4.0]``
+    (a single optimizer parameter ``_4SDEP``). If a GRU-level parameter
+    appears in only one dictionary, those bounds are used directly. If it does
+    not appear in any dictionary, it is excluded from calibration.
+
+  .. note::
+
+     The mixed-vegetation format only applies to the ``"class"`` parameter
+     group. The ``"hydrology"`` and ``"routing"`` groups always use the
+     standard flat-dictionary format.
+
+  You are free to combine both formats in the same ``parameter_bounds``
+  dictionary. For instance, GRU 1 can use the standard single-dict format
+  while GRU 4 uses the list-of-dicts format for its mixed vegetation:
+
+  .. code-block:: python
+
+     "parameter_bounds": {
+         "class": {
+             1: {"sdep": [0.5, 4.0]},  # single-veg GRU
+             4: [                       # mixed-veg GRU
+                 {"class": "needleleaf", "fcan": [0.1, 0.8], "sdep": [0.5, 4.0]},
+                 {"class": "broadleaf", "fcan": [0.2, 0.9], "sdep": [1.0, 3.0]},
+             ],
+         },
+         "hydrology": {1: {"zsnl": [0.03, 0.6]}},
+         "routing": {1: {"r1n": [0.001, 2.0], "r2n": [0.001, 2.0]}},
+     }
 - ``executable``: absolute (or relative) path to the model executable used in runs
   (e.g., ``"sa_mesh"``). If a bare name is given, ensure it is discoverable via
   ``PATH`` or handled by the workflow’s staging logic.
