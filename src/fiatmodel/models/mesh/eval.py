@@ -314,7 +314,12 @@ def build_calibration_subset(
     orig_min, orig_max = time_index.min(), time_index.max()
     requested_min, requested_max = union_index.min(), union_index.max()
     if requested_min < orig_min or requested_max > orig_max:
-        raise KeyError("Requested calibration range beyond simulation time-series")
+        raise KeyError(
+            "Requested calibration range beyond simulation time-series. "
+            f"Dataset time range: [{orig_min}, {orig_max}], "
+            f"requested range: [{requested_min}, {requested_max}], "
+            f"inferred freq: {freq}"
+        )
 
     # Reindex (no fill method => NaNs)
     out = ds.reindex(time=union_index)
@@ -596,6 +601,11 @@ if __name__ == "__main__":
                         # so it's results won't be printed as a .csv file, but is used for other
                         # `custom` objective functions
                         else:
+                            # convert existing list-valued helpers to numpy arrays
+                            # so arithmetic expressions work element-wise
+                            for k in helper_ofs[flux]:
+                                if isinstance(helper_ofs[flux][k], list):
+                                    helper_ofs[flux][k] = np.array(helper_ofs[flux][k])
                             # because this helper function will be based on those already defined
                             # in helper_ofs[flux].keys(), we will do some string adjustments
                             # to assure evaluation goes well
@@ -605,7 +615,7 @@ if __name__ == "__main__":
                             new_ofs = []
                             # go over each expression in the ofs list and replace existing expressions
                             # with Python valid, explicit helper_ofs references
-                            ofs = metrics[metric]
+                            ofs = metrics[metric] if isinstance(metrics[metric], list) else [metrics[metric]]
                             for expr in ofs:
                                 new_expr = expr
                                 for k in existing_keys:
@@ -618,7 +628,7 @@ if __name__ == "__main__":
                                 result = eval(of)
                                 helper_ofs[flux][metric] = result
 
-            elif 'custom' in flux:
+            elif 'custom' in group:
                 for flux, metrics in fluxes.items():
                     # define empty sims and obs dictionaries - based on chosen `flux`
                     sims = {}
@@ -637,16 +647,21 @@ if __name__ == "__main__":
                         # to assure evaluation goes well
                         # replace any existing custom_ofs[flux] keys in the
                         # expression strings with explicit custom_ofs references
-                        existing_keys = [k for k in custom_ofs[flux].keys() if k != metric]
+                        existing_custom_keys = [k for k in custom_ofs[flux].keys() if k != metric]
+                        existing_helper_keys = list(helper_ofs.get(flux, {}).keys())
                         new_ofs = []
                         # go over each expression in the ofs list and replace existing expressions
-                        # with Python valid, explicit custom_ofs references
-                        ofs = list(metrics[metric])
+                        # with Python valid, explicit helper_ofs/custom_ofs references
+                        ofs = metrics[metric] if isinstance(metrics[metric], list) else [metrics[metric]]
                         for expr in ofs:
                             new_expr = expr
-                            for k in existing_keys:
+                            for k in existing_helper_keys:
                                 pattern = rf'\b{re.escape(k)}\b'
                                 replacement = f"helper_ofs['{flux}']['{k}']"
+                                new_expr = re.sub(pattern, replacement, new_expr)
+                            for k in existing_custom_keys:
+                                pattern = rf'\b{re.escape(k)}\b'
+                                replacement = f"custom_ofs['{flux}']['{k}']"
                                 new_expr = re.sub(pattern, replacement, new_expr)
                             new_ofs.append(new_expr)
 
