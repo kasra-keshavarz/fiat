@@ -284,7 +284,7 @@ def build_calibration_subset(
     # Extract intervals
     starts = pd.to_datetime([d['start'] for d in dates])
     ends   = pd.to_datetime([d['end'] for d in dates])
-    
+
     if len(starts) != len(ends):
         raise ValueError("Starts and ends length mismatch.")
 
@@ -592,8 +592,37 @@ if __name__ == "__main__":
                 how = 'mean' if v in DEFAULTS['output_variables']['mean'] else 'sum'
                 sim_sub = resample_per_variable(sim_sub, rule=obs_ts, methods={"QO": "sum", "QI": "mean"})
 
-        station_ids = obs_sub.subbasin.to_numpy().tolist()
-        station_names = obs_sub.name.to_numpy().tolist()
+        # Filter out stations whose observations are entirely NaN for
+        # the selected calibration period.  Keeps only stations that have
+        # at least one non-NaN value in any observed data variable.
+        all_station_ids = obs_sub.subbasin.to_numpy().tolist()
+        obs_data_vars = [
+            v for v in obs_sub.data_vars
+            if v not in ('applied_scale_factor', 'applied_offset_factor')
+        ]
+        station_ids = []
+        for st in all_station_ids:
+            st_slice = obs_sub.sel(subbasin=st)
+            all_nan = all(
+                np.isnan(st_slice[v].values).all() for v in obs_data_vars
+            )
+            if all_nan:
+                st_name = obs_sub['name'].sel(subbasin=st).to_numpy().tolist()
+                warnings.warn(
+                    f"Station '{st_name}' (subbasin={st}) has entirely NaN "
+                    f"observations for the calibration period — excluding "
+                    f"from evaluation."
+                )
+            else:
+                station_ids.append(st)
+
+        if len(station_ids) == 0:
+            raise ValueError(
+                "All stations have entirely NaN observations for the "
+                "calibration period. Cannot compute objective functions."
+            )
+
+        station_names = obs_sub.name.sel(subbasin=station_ids).to_numpy().tolist()
 
         # evaluate objective functions
         of_values = {}
@@ -619,9 +648,26 @@ if __name__ == "__main__":
                             station_metrics = compute_metric_dict(
                                 sim_series, obs_series, metric_name
                             )
+                            # Warn about stations producing non-finite metrics
+                            nan_stations = [
+                                n for n, v in station_metrics.items()
+                                if not np.isfinite(v)
+                            ]
+                            if nan_stations:
+                                warnings.warn(
+                                    f"Metric '{metric_name}' produced non-finite "
+                                    f"value for station(s) {nan_stations} on flux "
+                                    f"'{flux_var}' — excluding from aggregate "
+                                    f"evaluation."
+                                )
                             for expr in metrics[metric_name]:
-                                metric_value = ne.evaluate(expr, local_dict=station_metrics)
-                                helper_ofs[flux_var][metric_name].append(metric_value)
+                                try:
+                                    metric_value = ne.evaluate(expr, local_dict=station_metrics)
+                                except KeyError:
+                                    # Station was excluded (e.g., all-NaN observations)
+                                    continue
+                                if np.isfinite(metric_value):
+                                    helper_ofs[flux_var][metric_name].append(metric_value)
                         else:
                             # derived helper: expression referencing previously computed helpers
                             for k in helper_ofs[flux_var]:
@@ -667,9 +713,22 @@ if __name__ == "__main__":
                         station_metrics = compute_metric_dict(
                             sim_series, obs_series, metric_name
                         )
+                        nan_stations = [
+                            n for n, v in station_metrics.items()
+                            if not np.isfinite(v)
+                        ]
+                        if nan_stations:
+                            warnings.warn(
+                                f"Metric '{metric_name}' produced non-finite "
+                                f"value for station(s) {nan_stations} on flux "
+                                f"'{flux_var}'."
+                            )
 
                         for idx, expr in enumerate(expressions, start=1):
-                            metric_value = ne.evaluate(expr, local_dict=station_metrics)
+                            try:
+                                metric_value = ne.evaluate(expr, local_dict=station_metrics)
+                            except KeyError:
+                                continue
                             of_values[flux_var][metric_name] = metric_value
                             write_of_csv(output_dir, group, flux_var, metric_name, idx, metric_value)
 
