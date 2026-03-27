@@ -444,6 +444,8 @@ class Calibration(object):
         # Coordinate arrays per computational unit
         names_by_id: Dict[int, str] = {}
         freq_by_id: Dict[int, str] = {}
+        scale_by_id: Dict[int, float] = {}
+        offset_by_id: Dict[int, float] = {}
         cu_kind: str | None = None
 
         # Prepare containers per type
@@ -478,6 +480,10 @@ class Calibration(object):
                 names_by_id[cu_id] = name
             if cu_id not in freq_by_id and freq is not None:
                 freq_by_id[cu_id] = freq
+            if cu_id not in scale_by_id:
+                scale_by_id[cu_id] = scale
+            if cu_id not in offset_by_id:
+                offset_by_id[cu_id] = offset
 
             _ensure_matrix_for_type(typ)
 
@@ -511,6 +517,8 @@ class Calibration(object):
         # Build coords
         name_arr = np.array([names_by_id.get(cu, None) for cu in cu_ids], dtype=str)
         freq_arr = np.array([freq_by_id.get(cu, None) for cu in cu_ids], dtype=str)
+        scale_arr = np.array([scale_by_id.get(cu, 1.0) for cu in cu_ids], dtype=float)
+        offset_arr = np.array([offset_by_id.get(cu, 0.0) for cu in cu_ids], dtype=float)
 
         coords = {
             dim_name: cu_ids,
@@ -524,10 +532,19 @@ class Calibration(object):
         for typ, arr in arrays_by_type.items():
             var_attrs = {
                 "units": unit_by_type[typ],
-                "applied_offset_factor": float(offset),
-                "applied_scale_factor": float(scale),
+                "ancillary_variables": "applied_scale_factor applied_offset_factor",
             }
             data_vars[typ] = ((dim_name, "time"), arr, var_attrs)
+
+        # Ancillary variables for per-gauge scale and offset (CF convention)
+        data_vars["applied_scale_factor"] = (
+            (dim_name,), scale_arr,
+            {"long_name": "scale factor applied to raw observations"},
+        )
+        data_vars["applied_offset_factor"] = (
+            (dim_name,), offset_arr,
+            {"long_name": "offset factor applied to raw observations"},
+        )
 
         ds = xr.Dataset(data_vars=data_vars, coords=coords)
 
