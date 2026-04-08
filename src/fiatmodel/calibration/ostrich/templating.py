@@ -27,6 +27,7 @@ from typing import (
     List,
 )
 from pathlib import Path
+from datetime import datetime
 
 # internal imports
 from ..optimizer import OptimizerTemplateEngine
@@ -254,7 +255,9 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         )
 
         archive_content = self.archive_template.render(
-            model=self.model.model_software.lower())
+            model=self.model.model_software.lower(),
+            timestamp=datetime.now().strftime('%Y-%m-%dT%H.%M.%S'),
+        )
         with open(archive_script_path, 'w') as f:
             f.write(archive_content)
 
