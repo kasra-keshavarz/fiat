@@ -197,7 +197,7 @@ BeginParams
                 {% if silt_name not in silt.included %}
                   {# Adding a silt parameter with fixed value of 0.0, min of 0.0, and max of 50.0 #}
                   {% set _ = silt.included.append(silt_name) %}
-    {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
+    {{ silt_name }} 0.0  0.0  50.0 none none none free
                 {% endif %}
             {% elif 'SAND' in param_name %}
               {% set param_name = param_name | replace('SAND', 'SND') ~ '_' %}
@@ -205,11 +205,11 @@ BeginParams
               {% if silt_name not in silt.included %}
                 {% set _ = silt.included.append(silt_name) %}
                 {# Adding a silt parameter with fixed value of 0.0, min of 0.0, and max of 50.0 #}
-    {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
+    {{ silt_name }} 0.0  0.0  50.0 none none none free
               {% endif %}
             {% endif %}
             {# so far, we were able to get the parameter name #}
-    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none F7.3
+    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none free
           {% elif unit_data is iterable %}
             {# Mixed-veg GRU: unit_data is a list of veg dicts #}
             {% if bounds is mapping %}
@@ -224,17 +224,17 @@ BeginParams
                     {% set silt_name = param_name | replace('CLY', 'SLT') %}
                     {% if silt_name not in silt.included %}
                       {% set _ = silt.included.append(silt_name) %}
-    {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
+    {{ silt_name }} 0.0  0.0  50.0 none none none free
                     {% endif %}
                   {% elif 'SAND' in param_name %}
                     {% set param_name = param_name | replace('SAND', 'SND') ~ '_' %}
                     {% set silt_name = param_name | replace('SND', 'SLT') %}
                     {% if silt_name not in silt.included %}
                       {% set _ = silt.included.append(silt_name) %}
-    {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
+    {{ silt_name }} 0.0  0.0  50.0 none none none free
                     {% endif %}
                   {% endif %}
-    {{ param_name }}  {{ class_bounds[0] }}   {{ class_bounds[0] }}   {{ class_bounds[1] }} none none none F7.3
+    {{ param_name }}  {{ class_bounds[0] }}   {{ class_bounds[0] }}   {{ class_bounds[1] }} none none none free
                 {% endif %}
               {% endfor %}
             {% else %}
@@ -249,17 +249,17 @@ BeginParams
                     {% set silt_name = param_name | replace('CLY', 'SLT') %}
                     {% if silt_name not in silt.included %}
                       {% set _ = silt.included.append(silt_name) %}
-    {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
+    {{ silt_name }} 0.0  0.0  50.0 none none none free
                     {% endif %}
                   {% elif 'SAND' in param_name %}
                     {% set param_name = param_name | replace('SAND', 'SND') ~ '_' %}
                     {% set silt_name = param_name | replace('SND', 'SLT') %}
                     {% if silt_name not in silt.included %}
                       {% set _ = silt.included.append(silt_name) %}
-    {{ silt_name }} 0.0  0.0  50.0 none none none F7.3
+    {{ silt_name }} 0.0  0.0  50.0 none none none free
                     {% endif %}
                   {% endif %}
-    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none F7.3
+    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none free
                 {% endif %}
               {% endfor %}
             {% endif %}
@@ -277,7 +277,7 @@ BeginParams
         {% for name, bounds in param_set.items() %}
           {# Extract templated calibrating parameter name #}
           {% set param_name = parameters.get(param_group)[unit - 1].get(name) %}
-    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none F7.3
+    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none free
         {% endfor %}
 
       {% endfor %}
@@ -372,17 +372,17 @@ BeginTiedParams
                 {# If, all soil parameters need to be defined in constraints #}
                 {% if string_keys | length == 3 %}
     # name          np   pname1      pname2      pname3      type    dtype1   dtype2   dtype3   format
-    {{ sum_soil }}    3    {{ proxy_params.get(string_keys[0]) }}     {{ proxy_params.get(string_keys[1]) }}     {{ proxy_params.get(string_keys[2]) }}     wsum    1        1        1        F7.3
+    {{ sum_soil }}    3    {{ proxy_params.get(string_keys[0]) }}     {{ proxy_params.get(string_keys[1]) }}     {{ proxy_params.get(string_keys[2]) }}     wsum    1        1        1        free
     # name     np   pname1      pname2           type1    c3   c2   c1   c0    format
-    {{ layer_params.get(string_keys[0]) }}    2    {{ proxy_params.get(string_keys[0]) }}     {{ sum_soil }}     ratio    100  1    1    0     F7.3
-    {{ layer_params.get(string_keys[1]) }}    2    {{ proxy_params.get(string_keys[1]) }}     {{ sum_soil }}     ratio    100  1    1    0     F7.3
+    {{ layer_params.get(string_keys[0]) }}    2    {{ proxy_params.get(string_keys[0]) }}     {{ sum_soil }}     ratio    100  1    1    0     free
+    {{ layer_params.get(string_keys[1]) }}    2    {{ proxy_params.get(string_keys[1]) }}     {{ sum_soil }}     ratio    100  1    1    0     free
                 {# Now, defining the ratio constraints #}
                 {% endif %}
                 {# If only two parameters are defined, we need to create the third one #}
                 {% if string_keys | length == 2 %}
                   {# Now that we know the parameter that is left out, we need to identify it #}
     # name          np   pname1      pname2      type1   dtype1   dtype2   format
-    {{ sum_soil }}    2    {{ proxy_params.get(string_keys[0]) }}     {{ proxy_params.get(string_keys[1]) }}     wsum    1        1        F7.3
+    {{ sum_soil }}    2    {{ proxy_params.get(string_keys[0]) }}     {{ proxy_params.get(string_keys[1]) }}     wsum    1        1        free
                   {# c0 would be the left out parameter value that is not entered
                     in the calibration process #}
                   {% set ns = namespace(left_out_param='') %}
@@ -393,7 +393,7 @@ BeginTiedParams
                   {% endfor %}
                   {% set c0 = layer_params.get(ns.left_out_param) %}
     # name     np   pname1      pname2           type1    c3   c2   c1   c0         format
-    {{ layer_params.get(string_keys[0]) }}    2    {{ proxy_params.get(string_keys[0]) }}     {{ sum_soil }}     ratio    100  1    1    {{ "%.3f" | format(c0) }}     F7.3
+    {{ layer_params.get(string_keys[0]) }}    2    {{ proxy_params.get(string_keys[0]) }}     {{ sum_soil }}     ratio    100  1    1    {{ "%.3f" | format(c0) }}     free
                 {% endif %}
               {% endif %}
             {% endif %}
