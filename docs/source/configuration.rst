@@ -159,8 +159,14 @@ bounds.
   - ``"routing"``: mapping MESH river class to parameter bounds
 
   For the ``class`` and ``hydrology`` groups, the integer keys
-  reference MESH GRU identifiers, as the base computational unit, while for the
-  ``routing`` group, the integer keys typically reference river class identifiers.
+  are **MID values** (Mosaic Identifier) as defined in the model's
+  ``MESH_parameters_CLASS.ini`` file. The MID appears on the second
+  hydrology line of each GRU block (e.g., ``… 5 Temp_sub-_broa_deci_fore``
+  where ``5`` is the MID). These identifiers are typically non-contiguous
+  (e.g., ``1, 2, 5, 6, 8, 10, 14, …``) and directly correspond to
+  the column headers printed in the GRU-dependent parameter section of
+  ``MESH_parameters_hydrology.ini``. For the ``routing`` group, integer keys
+  reference river class identifiers (0-based).
   For more information, refer to the `MESH model documentation <https://mesh-model.atlassian.net/wiki/spaces/USER/overview?mode=global>`_
   and the `MESHFlow workflow guide <https://mesh-workflow.readthedocs.io/en/latest/>`_.
 
@@ -185,8 +191,8 @@ bounds.
          },
      }
 
-  Here, ``1`` and ``2`` under ``"class"`` are GRU identifiers (1-based integers,
-  matching the order of GRU blocks in ``MESH_parameters_CLASS.ini``). Each
+  Here, ``1`` and ``2`` under ``"class"`` are MID values from the
+  ``MESH_parameters_CLASS.ini`` file (not sequential indices). Each
   parameter name (e.g., ``"sdep"``, ``"fcan"``) maps to its lower and upper
   calibration bounds.
 
@@ -249,6 +255,22 @@ bounds.
      The mixed-vegetation format only applies to the ``"class"`` parameter
      group. The ``"hydrology"`` and ``"routing"`` groups always use the
      standard flat-dictionary format.
+
+  .. warning::
+
+     The bounds format **must** match the actual GRU type parsed from the
+     ``MESH_parameters_CLASS.ini`` file. FIAT validates this at preparation
+     time:
+
+     - If a **list of dictionaries** (mixed-vegetation format) is provided
+       for a GRU that contains only a single vegetation type, a
+       ``ValueError`` is raised.
+     - Conversely, if a **flat dictionary** (single-vegetation format) is
+       provided for a GRU that actually contains multiple vegetation types,
+       a ``ValueError`` is raised.
+
+     Ensure your bounds format matches each GRU's vegetation structure as
+     defined in the model instance.
 
   You are free to combine both formats in the same ``parameter_bounds``
   dictionary. For instance, GRU 1 can use the standard single-dict format

@@ -23,10 +23,12 @@ Parameter bounds define the search space for the optimizer. Each parameter
 group (``class``, ``hydrology``, ``routing``) maps integer computational-unit
 identifiers to dictionaries of ``{parameter_name: [min, max]}``.
 
-For the ``class`` group, integer keys are GRU identifiers (1-based, matching
-the order of GRU blocks in ``MESH_parameters_CLASS.ini``). For ``hydrology``,
-keys are also GRU identifiers. For ``routing``, keys are river class
-identifiers (1-based, maximum 5).
+For the ``class`` and ``hydrology`` groups, integer keys are **MID values**
+(Mosaic Identifiers) from the ``MESH_parameters_CLASS.ini`` file. These are
+typically non-contiguous (e.g., ``1, 2, 5, 6, 8, 10, 14, …``) and match the
+column headers in the GRU-dependent section of
+``MESH_parameters_hydrology.ini``. For ``routing``, keys are river class
+identifiers (0-based).
 
 **Single-vegetation GRUs**
 
