@@ -451,6 +451,7 @@ def parse_class_hyd2(
         'xdrainh': float(hyd_line[1]),
         'mann': float(hyd_line[2]),
         'ksat': float(hyd_line[3]),
+        'mid_id': int(hyd_line[4]),
         'mid': " ".join(hyd_line[5:])
     }
 

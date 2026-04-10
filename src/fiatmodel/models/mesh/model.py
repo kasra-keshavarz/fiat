@@ -552,10 +552,11 @@ class MESH(ModelBuilder):
                 else:
                     class_type = class_name_dict[gru_idx]
 
-                gru_entry[idx] = {'class': class_type}
-                gru_entry[idx].update(veg1_params)
-                gru_entry[idx].update(veg2_params)
-                gru_entry[idx].update(shared_params)
+                mid_id = hyd2_params['mid_id']
+                gru_entry[mid_id] = {'class': class_type}
+                gru_entry[mid_id].update(veg1_params)
+                gru_entry[mid_id].update(veg2_params)
+                gru_entry[mid_id].update(shared_params)
 
             else:
                 # Mixed vegetation type -- produce a list of dicts,
@@ -583,7 +584,7 @@ class MESH(ModelBuilder):
                     combined.update(shared_params)
                     veg_dicts.append(combined)
 
-                gru_entry[idx] = veg_dicts
+                gru_entry[hyd2_params['mid_id']] = veg_dicts
 
         return case_entry, info_entry, gru_entry
 
@@ -617,8 +618,20 @@ class MESH(ModelBuilder):
             routing_dict = [v for v in routing_df.values()]
 
         # and second, the hydrology dictionary
+        # parse the MID header line (prefixed with '!') to use as column keys
+        hydrology_lines = sections[4].strip().splitlines()
+        mid_columns = None
+        for line in hydrology_lines:
+            if line.strip().startswith('!'):
+                mid_columns = [int(v) for v in line.strip().lstrip('!').split()]
+                break
+
         hydrology_df = pd.read_csv(StringIO(sections[4]), comment='#', sep='\s+', index_col=0, skiprows=2, header=None)
         hydrology_df.index = hydrology_df.index.str.lower()
+
+        if mid_columns is not None:
+            hydrology_df.columns = mid_columns
+
         # and we return a dictionary of this
         hydrology_dict = hydrology_df.to_dict()
 
@@ -803,6 +816,21 @@ class MESH(ModelBuilder):
         normalized_bounds = copy.deepcopy(self.config['parameter_bounds'])
         if 'class' in normalized_bounds:
             for unit, unit_bounds in normalized_bounds['class'].items():
+                unit_data = self.parameters['class'][unit]
+                if isinstance(unit_bounds, list) and not isinstance(unit_data, list):
+                    raise ValueError(
+                        f"GRU {unit} (class '{unit_data['class']}') is a "
+                        f"single-vegetation GRU, but a list of mixed-vegetation "
+                        f"bounds was provided. Use a single dictionary instead."
+                    )
+                if isinstance(unit_bounds, dict) and isinstance(unit_data, list):
+                    veg_classes = [v['class'] for v in unit_data]
+                    raise ValueError(
+                        f"GRU {unit} is a mixed-vegetation GRU with classes "
+                        f"{veg_classes}, but a single dictionary of bounds was "
+                        f"provided. Use a list of dictionaries (one per "
+                        f"vegetation class) instead."
+                    )
                 if isinstance(unit_bounds, list):
                     normalized_bounds['class'][unit] = \
                         normalize_mixed_veg_bounds(unit_bounds)
