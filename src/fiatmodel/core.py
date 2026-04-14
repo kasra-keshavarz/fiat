@@ -13,6 +13,7 @@ import json
 import sys
 import os
 import re
+import inspect
 import shutil
 
 from importlib.resources import (
@@ -691,6 +692,25 @@ class Calibration(object):
                 for key in self.model.others.keys()
             }
         }
+
+        # Extract user-defined callable metrics so the config is JSON-serializable.
+        # Callables are replaced by their __name__ in objective_functions, and
+        # their source code is stored separately for reconstruction in eval.py.
+        user_defined_metrics = {}
+        obj_fns = eval_dict['objective_functions']
+        for group in obj_fns:
+            for flux_var in obj_fns[group]:
+                new_metrics = {}
+                for metric_name, value in obj_fns[group][flux_var].items():
+                    if callable(metric_name):
+                        name = metric_name.__name__
+                        user_defined_metrics[name] = inspect.getsource(metric_name)
+                        new_metrics[name] = value
+                    else:
+                        new_metrics[metric_name] = value
+                obj_fns[group][flux_var] = new_metrics
+        if user_defined_metrics:
+            eval_dict['user_defined_metrics'] = user_defined_metrics
 
         # dumping the dictionary into a JSON file for the evaluation script
         eval_path = os.path.join(

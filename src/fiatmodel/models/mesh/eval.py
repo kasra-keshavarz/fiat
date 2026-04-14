@@ -39,6 +39,7 @@ import re
 import json
 import shutil
 import sys
+import textwrap
 import warnings
 
 from typing import (
@@ -476,6 +477,22 @@ if __name__ == "__main__":
     # read the `json` configuration file
     with open("./etc/eval/eval.json", "r") as f:
         eval_config = json.load(f, object_hook=_make_object_hook())
+
+    # Reconstruct user-defined callable metrics from stored source code.
+    _user_metric_funcs = {}
+    for name, source in eval_config.pop('user_defined_metrics', {}).items():
+        _ns = {'np': np, 'numpy': np}
+        exec(textwrap.dedent(source), _ns)
+        _user_metric_funcs[name] = _ns[name]
+
+    # Replace string keys with the reconstructed callables in objective_functions.
+    if _user_metric_funcs:
+        for group in eval_config['objective_functions']:
+            for flux_var in eval_config['objective_functions'][group]:
+                metrics = eval_config['objective_functions'][group][flux_var]
+                for name, func in _user_metric_funcs.items():
+                    if name in metrics:
+                        metrics[func] = metrics.pop(name)
 
     # empty the output directory before anything else
     _reset_dir(
