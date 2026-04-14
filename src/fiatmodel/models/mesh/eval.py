@@ -404,11 +404,23 @@ def build_station_series(sim_sub, obs_sub, flux_var, station_ids):
     return sim_series, obs_series
 
 def compute_metric_dict(sim_series, obs_series, metric_name):
-    """Compute a HydroErr metric for each station.
+    """Compute a metric for each station.
+
+    ``metric_name`` can be a string (looked up from *HydroErr*) or a
+    callable that accepts ``(simulated, observed)`` and returns a scalar.
 
     Returns a dictionary keyed by station name with scalar metric values.
     """
-    metric_func = getattr(HydroErr, metric_name)
+    if callable(metric_name):
+        metric_func = metric_name
+    elif hasattr(HydroErr, metric_name):
+        metric_func = getattr(HydroErr, metric_name)
+    else:
+        raise ValueError(
+            f"Metric '{metric_name}' is not a recognized HydroErr "
+            f"metric and is not a callable. Provide a valid HydroErr "
+            f"metric name or a callable accepting (simulated, observed)."
+        )
     return {
         name: metric_func(sim_series[name], obs_series[name])
         for name in obs_series
@@ -640,7 +652,7 @@ if __name__ == "__main__":
                     for metric_name in metrics:
                         helper_ofs[flux_var][metric_name] = []
 
-                        if metric_name in hydro_err_ofs:
+                        if metric_name in hydro_err_ofs or callable(metric_name):
                             # standard HydroErr metric
                             sim_series, obs_series = build_station_series(
                                 sim_sub, obs_sub, flux_var, station_ids
