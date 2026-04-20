@@ -37,6 +37,67 @@ _CLASS_VEG_PARAMS = frozenset([
     'rsmn', 'qa50', 'vpda', 'vpdb', 'psga', 'psgb',
 ])
 
+# Supported internal-sampling transformations for Ostrich ``txOst`` field.
+# See Ostrich v17 manual §2.7 (Real-valued Parameters).
+_SUPPORTED_SCALES = frozenset(['none', 'log10', 'ln'])
+
+
+def parse_param_bounds(bnd):
+    """Validate and normalize a single parameter-bounds entry.
+
+    Accepts either ``[min, max]`` (uniform internal sampling, default) or
+    ``[min, max, scale]`` where ``scale`` selects the transformation Ostrich
+    applies internally during sampling/optimization. Bounds in the config
+    stay in native (user-facing) units; only Ostrich's internal search space
+    is transformed.
+
+    Parameters
+    ----------
+    bnd : list or tuple
+        Bounds entry of length 2 or 3.
+
+    Returns
+    -------
+    tuple
+        ``(lo, hi, scale)`` where ``scale`` is one of ``'none'``, ``'log10'``,
+        or ``'ln'``.
+
+    Raises
+    ------
+    TypeError
+        If ``bnd`` is not a sequence of length 2 or 3.
+    ValueError
+        If ``scale`` is unsupported, if ``lo >= hi``, or if a logarithmic
+        scale is requested with a non-positive lower bound.
+    """
+    if not isinstance(bnd, (list, tuple)) or len(bnd) not in (2, 3):
+        raise TypeError(
+            f"Parameter bounds must be a list/tuple of length 2 or 3, "
+            f"got {bnd!r}."
+        )
+    lo, hi = bnd[0], bnd[1]
+    scale = bnd[2] if len(bnd) == 3 else 'none'
+    if not isinstance(scale, str):
+        raise TypeError(
+            f"Parameter bounds scale must be a string, got {scale!r}."
+        )
+    scale = scale.lower()
+    if scale not in _SUPPORTED_SCALES:
+        raise ValueError(
+            f"Unsupported parameter-bounds scale {scale!r}. "
+            f"Supported values are: {sorted(_SUPPORTED_SCALES)}."
+        )
+    if lo >= hi:
+        raise ValueError(
+            f"Parameter bounds must satisfy min < max, got [{lo}, {hi}]."
+        )
+    if scale in ('log10', 'ln') and lo <= 0:
+        raise ValueError(
+            f"Logarithmic scale {scale!r} requires strictly positive bounds; "
+            f"got [{lo}, {hi}]."
+        )
+    return lo, hi, scale
+
 
 def normalize_mixed_veg_bounds(bounds_list):
     """Normalize a list-of-dicts parameter bounds for a mixed-veg GRU.
@@ -49,6 +110,11 @@ def normalize_mixed_veg_bounds(bounds_list):
     GRU-level parameters are merged to the widest range across all dicts::
 
         {"sdep": [0.5, 4.0]}
+
+    Bounds entries may optionally include a third element selecting Ostrich's
+    internal sampling scale (``'none'``, ``'log10'``, or ``'ln'``), e.g.
+    ``[1e-8, 1e-1, "log10"]``. For GRU-level parameters, the scale must
+    agree across all mixed-veg entries.
 
     Parameters
     ----------
@@ -67,16 +133,26 @@ def normalize_mixed_veg_bounds(bounds_list):
         for param, bnd in bounds_dict.items():
             if param == 'class':
                 continue
+            lo, hi, scale = parse_param_bounds(bnd)
+            entry = [lo, hi] if scale == 'none' else [lo, hi, scale]
             if param in _CLASS_VEG_PARAMS:
                 # veg-specific: store per-class
-                normalized.setdefault(param, {})[class_name] = bnd
+                normalized.setdefault(param, {})[class_name] = entry
             else:
                 # GRU-level: widen to the union of all provided ranges
                 if param not in normalized:
-                    normalized[param] = list(bnd)
+                    normalized[param] = list(entry)
                 else:
-                    normalized[param][0] = min(normalized[param][0], bnd[0])
-                    normalized[param][1] = max(normalized[param][1], bnd[1])
+                    existing = normalized[param]
+                    existing_scale = existing[2] if len(existing) == 3 else 'none'
+                    if existing_scale != scale:
+                        raise ValueError(
+                            f"Inconsistent scale for GRU-level parameter "
+                            f"{param!r} across mixed-veg entries: "
+                            f"{existing_scale!r} vs {scale!r}."
+                        )
+                    existing[0] = min(existing[0], lo)
+                    existing[1] = max(existing[1], hi)
 
     return normalized
 

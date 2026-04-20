@@ -293,6 +293,40 @@ bounds.
   (e.g., ``"sa_mesh"``). If a bare name is given, ensure it is discoverable via
   ``PATH`` or handled by the workflow’s staging logic.
 
+  **Logarithmic internal sampling (optional)**
+
+  Any bounds entry may optionally include a **third element** selecting the
+  internal sampling scale that Ostrich applies to the parameter during
+  optimization (the ``txOst`` field in the Ostrich manual, §2.7). Supported
+  values are:
+
+  - ``"none"`` (default): uniform sampling in native units,
+  - ``"log10"``: Ostrich samples internally in base-10 log space,
+  - ``"ln"``: Ostrich samples internally in natural-log space.
+
+  The bounds themselves stay in **native (real-number) units** — only
+  Ostrich's internal search space is transformed. This is useful for
+  parameters whose plausible range spans several orders of magnitude (e.g.,
+  MESH's ``FLZ``):
+
+  .. code-block:: python
+
+     "parameter_bounds": {
+         "hydrology": {
+             15: {"flz":  [1e-8, 1e-1, "log10"],
+                  "zpls": [0.02, 0.6]},
+         },
+     }
+
+  Validation rules:
+
+  - Log-scale requires **strictly positive** bounds (``min > 0``).
+  - For mixed-vegetation GRU-level parameters, the scale must be consistent
+    across all vegetation entries.
+  - The soil ratio-constrained parameters (``clay1``–``clay3`` and
+    ``sand1``–``sand3``) must use ``"none"``; log transforms are not
+    compatible with the tied-ratio constraint.
+
 ``observations``
 ----------------
 

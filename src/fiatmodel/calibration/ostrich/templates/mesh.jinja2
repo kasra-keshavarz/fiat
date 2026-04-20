@@ -14,6 +14,10 @@
     {# define the padding given the column the `val' s length #}
     {{- " " * (column - (val | string | length) - cursor - 1) -}}
 {% endmacro %}
+{% macro tx_fields(bnd) -%}
+{%- set scale = bnd[2] if (bnd is iterable and bnd|length > 2) else 'none' -%}
+none {{ scale }} none
+{%- endmacro %}
 {#
    ==========================
    OSTRICH Configuration File
@@ -188,6 +192,12 @@ BeginParams
           {% if unit_data is mapping %}
             {# Single-veg GRU: extract param name directly #}
             {% set param_name = unit_data.get(name) %}
+            {# Defensive guard: a None here means the bounds key does not map
+               to a real parameter for this unit. ``MESH.prepare`` validates
+               this up front and raises a clear error, so reaching this branch
+               with a non-string param_name should not happen. Skip silently
+               rather than crashing on ``'CLAY' in None``. #}
+            {% if param_name is string %}
             {# Check whether 'CLAY' or 'SAND' are included `param_name` #}
             {# If so, we need to replace them with 'SLT' because of OSTRICH's
               limitations in dealing with constraints #}
@@ -209,7 +219,8 @@ BeginParams
               {% endif %}
             {% endif %}
             {# so far, we were able to get the parameter name #}
-    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none free
+    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} {{ tx_fields(bounds) }} free
+            {% endif %}{# param_name is string #}
           {% elif unit_data is iterable %}
             {# Mixed-veg GRU: unit_data is a list of veg dicts #}
             {% if bounds is mapping %}
@@ -234,7 +245,7 @@ BeginParams
     {{ silt_name }} 0.0  0.0  50.0 none none none free
                     {% endif %}
                   {% endif %}
-    {{ param_name }}  {{ class_bounds[0] }}   {{ class_bounds[0] }}   {{ class_bounds[1] }} none none none free
+    {{ param_name }}  {{ class_bounds[0] }}   {{ class_bounds[0] }}   {{ class_bounds[1] }} {{ tx_fields(class_bounds) }} free
                 {% endif %}
               {% endfor %}
             {% else %}
@@ -259,7 +270,7 @@ BeginParams
     {{ silt_name }} 0.0  0.0  50.0 none none none free
                     {% endif %}
                   {% endif %}
-    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none free
+    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} {{ tx_fields(bounds) }} free
                 {% endif %}
               {% endfor %}
             {% endif %}
@@ -277,7 +288,7 @@ BeginParams
         {% for name, bounds in param_set.items() %}
           {# Extract templated calibrating parameter name #}
           {% set param_name = parameters.get(param_group)[unit - 1].get(name) %}
-    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} none none none free
+    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} {{ tx_fields(bounds) }} free
         {% endfor %}
 
       {% endfor %}

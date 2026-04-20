@@ -814,6 +814,113 @@ class MESH(ModelBuilder):
         # params map to {class_name: [min, max]} and GRU-level params map
         # to [min, max] (widest range across all dicts).
         normalized_bounds = copy.deepcopy(self.config['parameter_bounds'])
+
+        # Validate every bounds entry once up front so errors are reported
+        # before any templating work. This walker enforces three properties:
+        #   1) the bounds entry itself is well-formed (delegated to
+        #      ``parse_param_bounds``);
+        #   2) logarithmic sampling is not requested for clay/sand soil
+        #      parameters, which are tied via ``BeginTiedParams`` ratio
+        #      constraints and must remain linear;
+        #   3) each ``(group, unit, name)`` key resolves to a real parameter
+        #      in ``self.parameters`` — this prevents a downstream Jinja2
+        #      ``'NoneType' is not iterable`` crash when the user references
+        #      a parameter that does not exist in the parsed model inputs.
+        _forbidden_log = {'clay1', 'clay2', 'clay3',
+                          'sand1', 'sand2', 'sand3'}
+
+        def _check_param_exists(group_name, unit, name, class_name=None):
+            grp = self.parameters.get(group_name)
+            if grp is None:
+                raise ValueError(
+                    f"Parameter group {group_name!r} is not present in the "
+                    f"parsed model parameters; cannot apply bounds."
+                )
+            if isinstance(grp, dict):
+                unit_data = grp.get(unit)
+                if unit_data is None:
+                    raise ValueError(
+                        f"Unit {unit!r} is not present in parameter group "
+                        f"{group_name!r}; cannot apply bounds for {name!r}."
+                    )
+                if isinstance(unit_data, dict):
+                    if name not in unit_data:
+                        raise ValueError(
+                            f"Parameter {name!r} not found in group "
+                            f"{group_name!r}, unit {unit!r}. Available "
+                            f"parameters: {sorted(unit_data.keys())}."
+                        )
+                elif isinstance(unit_data, list):
+                    if class_name is not None:
+                        matching = [d for d in unit_data
+                                    if d.get('class') == class_name]
+                        if not matching:
+                            available = [d.get('class') for d in unit_data]
+                            raise ValueError(
+                                f"Vegetation class {class_name!r} not found "
+                                f"in group {group_name!r}, unit {unit!r}. "
+                                f"Available classes: {available}."
+                            )
+                        if not any(name in d for d in matching):
+                            raise ValueError(
+                                f"Parameter {name!r} not found in group "
+                                f"{group_name!r}, unit {unit!r}, class "
+                                f"{class_name!r}."
+                            )
+                    else:
+                        if not any(name in d for d in unit_data):
+                            raise ValueError(
+                                f"Parameter {name!r} not found in any "
+                                f"vegetation entry of group {group_name!r}, "
+                                f"unit {unit!r}."
+                            )
+            elif isinstance(grp, list):
+                if not isinstance(unit, int) or unit < 1 or unit > len(grp):
+                    raise ValueError(
+                        f"Unit {unit!r} out of range for list-form group "
+                        f"{group_name!r} (expected 1..{len(grp)})."
+                    )
+                unit_data = grp[unit - 1]
+                if name not in unit_data:
+                    raise ValueError(
+                        f"Parameter {name!r} not found in list-form group "
+                        f"{group_name!r}, unit {unit!r}. Available "
+                        f"parameters: {sorted(unit_data.keys())}."
+                    )
+
+        def _walk_bounds(group_name, unit, name, bnd, class_name=None):
+            lo, hi, scale = parse_param_bounds(bnd)
+            if scale != 'none' and name in _forbidden_log:
+                raise ValueError(
+                    f"Parameter {name!r} (group {group_name!r}, unit {unit}) "
+                    f"participates in the clay/sand/silt ratio constraint "
+                    f"and cannot use scale {scale!r}; use 'none'."
+                )
+            _check_param_exists(group_name, unit, name, class_name)
+
+        for _gname, _gdict in normalized_bounds.items():
+            if not isinstance(_gdict, dict):
+                continue
+            for _unit, _unit_bounds in _gdict.items():
+                if isinstance(_unit_bounds, list):
+                    # Mixed-veg form: list of per-class dicts
+                    for _veg_dict in _unit_bounds:
+                        _cls = _veg_dict.get('class')
+                        for _p, _bnd in _veg_dict.items():
+                            if _p == 'class':
+                                continue
+                            _walk_bounds(_gname, _unit, _p, _bnd,
+                                         class_name=_cls)
+                elif isinstance(_unit_bounds, dict):
+                    for _p, _bnd in _unit_bounds.items():
+                        if isinstance(_bnd, dict):
+                            # per-class dict: {class_name: [min,max[,scale]]}
+                            for _cls, _cbnd in _bnd.items():
+                                _walk_bounds(_gname, _unit, _p, _cbnd,
+                                             class_name=_cls)
+                        else:
+                            _walk_bounds(_gname, _unit, _p, _bnd)
+
         if 'class' in normalized_bounds:
             for unit, unit_bounds in normalized_bounds['class'].items():
                 unit_data = self.parameters['class'][unit]
