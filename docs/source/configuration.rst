@@ -484,3 +484,203 @@ Below is the minimal structure you should provide (values are illustrative):
 
 Refer to the :doc:`examples` page for a complete, runnable setup derived from
 the repository Notebook.
+
+MESH parameter inequality constraints
+-------------------------------------
+
+Some MESH vegetation parameters are physically constrained relative to one
+another — for example, the minimum leaf-area index ``LAMN`` must never
+exceed the maximum ``LAMX``. A pure-uniform Ostrich sampler has no built-in
+awareness of such orderings, so roughly half the samples on the product
+rectangle :math:`[\text{LAMN}_{\min}, \text{LAMN}_{\max}] \times
+[\text{LAMX}_{\min}, \text{LAMX}_{\max}]` can fall in the infeasible
+triangle where ``LAMN > LAMX``. Running MESH on those pairs is at best
+wasteful and at worst produces non-physical states.
+
+FIAT enforces the ordering automatically through two complementary
+mechanisms, both wired into the generated Ostrich input file. **No changes
+to the evaluation script are required.**
+
+Where constraints are declared
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Constraints live in a plain-Python dict in
+``src/fiatmodel/models/mesh/constraints.py``. Add a new constraint by
+appending one line to the appropriate group dict:
+
+.. code-block:: python
+
+   CONSTRAINTS = {
+       "class": {
+           "lamn <= lamx": {
+               "cost_factor": 1.0e6,  # APM weight for the penalty term
+               "clamp": True,         # substitute max(lower, upper) into MESH
+           },
+           # Future examples (not currently active):
+           # "rsmn <= rsmx": {"cost_factor": 1.0e6, "clamp": True},
+       },
+       # "hydrology": {
+       #     "zsnl <= zpls": {"cost_factor": 1.0e6, "clamp": True},
+       # },
+   }
+
+The expression string (``"lamn <= lamx"``) accepts ``<``, ``<=``, ``>``, and
+``>=``. FIAT canonicalizes every entry into ``lower <= upper`` form.
+
+The two mechanisms
+~~~~~~~~~~~~~~~~~~
+
+Given calibration bounds like ``{"lamn": [0.0, 5.0], "lamx": [1.0, 10.0]}``
+on some vegetation class, FIAT compiles the following into the Ostrich
+input file at ``prepare()`` time:
+
+**1. Clamp chain (tied parameters) — what MESH actually runs on.**
+
+A short chain of Ostrich ``wsum`` / ``dist`` tied parameters builds the
+clamped upper bound:
+
+.. math::
+
+   \text{LAMX}_{\text{eff}} \;=\; \text{LAMX} + \max\bigl(0,\;
+   \text{LAMN} - \text{LAMX}\bigr) \;=\; \max(\text{LAMN},\,\text{LAMX})
+
+The MESH ``CLASS.ini`` template receives ``LAMX_EFF`` instead of the raw
+``LAMX``, so the model never runs on a physically infeasible
+``(LAMN, LAMX)`` pair — even when the optimizer samples one. The user does
+not see or configure this substitution; it happens entirely inside
+``model.py`` via ``substituted_templated_parameters``.
+
+**2. APM penalty (constraints block) — what biases the search.**
+
+Ostrich still samples the *raw* ``LAMX`` from its declared bounds, so on
+its own the clamp would make the objective perfectly flat across the
+infeasible triangle (every ``(LAMN, LAMX)`` with ``LAMN > LAMX`` collapses
+to the same ``(LAMN, LAMN)`` MESH run). That flatness would waste function
+evaluations and confuse gradient-aware optimizers. To fix this, FIAT also
+emits a tied response variable ``DIFF = LAMN − LAMX`` and a GCOP
+``BeginConstraints`` entry that adds
+
+.. math::
+
+   P \;=\; \text{CF} \cdot \max\bigl(0,\;\text{LAMN} - \text{LAMX}\bigr)
+
+to the objective whenever the pair is infeasible. With
+``cost_factor = 1.0e6``, the penalty dwarfs any realistic KGE/NSE score,
+producing a steep wall that steers the optimizer back into the feasible
+half-plane.
+
+Effect on the response surface — *yes, the evaluation is intentionally biased*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This is the user-visible trade-off to be aware of:
+
+* **On the feasible half-plane (LAMN ≤ LAMX),** the response surface is
+  unchanged — ``P = 0`` and MESH runs with the sampled ``LAMX``.
+* **On the infeasible half-plane (LAMN > LAMX),** the surface is
+  deliberately distorted in two stacked ways:
+
+  1. The model is run on ``max(LAMN, LAMX) = LAMN`` rather than on the
+     sampled ``LAMX``. The KGE/NSE reported for those samples therefore
+     reflects a point on the feasible boundary, not the point Ostrich
+     actually sampled.
+  2. A large additive penalty ``CF · (LAMN − LAMX)`` is added on top.
+
+Together, the infeasible half-plane shows a steep, monotone slope away
+from the ``LAMN = LAMX`` diagonal, with an artificially large cost. Any
+best-parameter set reported by Ostrich must land on the feasible side (by
+construction of the penalty), so the final answer is not biased; but the
+trajectory and the per-iteration log do contain these penalized,
+clamp-substituted evaluations and should not be mistaken for honest
+evaluations of the raw sampled pair.
+
+If you need the raw, unpenalized surface for diagnostic purposes (e.g.,
+sensitivity analysis), temporarily set ``"clamp": False`` and lower
+``cost_factor`` toward zero — but understand that MESH will then be asked
+to run on infeasible inputs.
+
+Scenario coverage
+~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 20 60
+
+   * - Lower calibrated?
+     - Upper calibrated?
+     - Behavior
+   * - Yes
+     - Yes
+     - Emit clamp chain + APM penalty (as above).
+   * - Yes
+     - No (fixed in ``.ini``)
+     - Validate that the lower's calibration max does not exceed the
+       fixed upper; raise ``ValueError`` otherwise.
+   * - No (fixed in ``.ini``)
+     - Yes
+     - Validate that the upper's calibration min is at least the fixed
+       lower; raise ``ValueError`` otherwise.
+   * - No
+     - No
+     - Silent no-op.
+
+Worked example — ``LAMN ≤ LAMX`` on class 1
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+With ``parameter_bounds = {"class": {1: {"lamn": [0.0, 5.0],
+"lamx": [1.0, 10.0]}}}``, ``prepare()`` appends the following to
+``ostIn.txt``:
+
+.. code-block:: text
+
+   BeginTiedParams
+     # Ordered-pair inequality clamp chains (e.g., LAMX_EFF = max(LAMN, LAMX))
+     # name          np   pname1      pname2      pname3      pname4      type    format
+     _1LAMN_LAMX_ABSD   4  _1LAMN  _1LAMN  _1LAMX  _1LAMN  dist  free
+     # name          np   pname1      pname2      type    c1     c2     format
+     _1LAMN_LAMX_DIFF   2  _1LAMN               _1LAMX               wsum  1.0  -1.0  free
+     _1LAMN_LAMX_SHIFT  2  _1LAMN_LAMX_DIFF     _1LAMN_LAMX_ABSD     wsum  0.5   0.5  free
+     _1LAMX_EFF         2  _1LAMX               _1LAMN_LAMX_SHIFT    wsum  1.0   1.0  free
+   EndTiedParams
+
+   BeginTiedRespVars
+     # Signed differences used by the APM penalty constraints below.
+     # name          np   pname1      pname2      type    c1     c2
+     _1LAMN_LAMX_DIFFRV  2  _1LAMN  _1LAMX  wsum  1.0  -1.0
+   EndTiedRespVars
+
+   BeginConstraints
+     # name                       type     CF            lwr          upr    resp
+     _1_LAMN_LT_LAMX  general  1.000000E+06  -1.0E99  0.0  _1LAMN_LAMX_DIFFRV
+   EndConstraints
+
+Line-by-line:
+
+- ``_1LAMN_LAMX_ABSD`` uses Ostrich's ``dist`` type with both
+  y-coordinates set equal to ``LAMN`` so the y-term cancels, leaving
+  ``|LAMN − LAMX|``. This avoids needing a separate constant-zero helper.
+- ``_1LAMN_LAMX_DIFF`` is the signed difference ``LAMN − LAMX`` via
+  ``wsum``.
+- ``_1LAMN_LAMX_SHIFT`` is ``(DIFF + ABSD) / 2 = max(0, LAMN − LAMX)``.
+- ``_1LAMX_EFF`` adds that shift back to the sampled ``LAMX``, yielding
+  ``max(LAMN, LAMX)`` — this is the name the MESH ``CLASS.ini`` actually
+  references.
+- ``_1LAMN_LAMX_DIFFRV`` is a duplicate of ``DIFF`` as a **tied response
+  variable**. Ostrich's ``BeginConstraints`` block can only reference
+  response variables, not tied parameters — this is the reason the same
+  quantity is declared twice.
+- ``_1_LAMN_LT_LAMX`` is the APM penalty itself. ``lwr = -1.0E99`` means
+  "no penalty when ``DIFF`` is negative" (feasible); ``upr = 0.0`` means
+  "penalty applies for any positive ``DIFF``"; ``CF = 1.0E6`` is the
+  weight taken from ``cost_factor``.
+
+For a list-form ``class`` unit with multiple vegetation classes, every
+field is suffixed with the class name (e.g., ``_6LAMX_EFF_NEEDLELEAF``)
+and the four lines above are repeated per class.
+
+.. note::
+
+   Because Ostrich still samples the raw ``LAMX`` from its declared bounds,
+   the raw iteration log should not be read as the value MESH actually saw.
+   The "effective" value MESH received is ``max(LAMN, LAMX)``, and the
+   reported objective on infeasible samples also includes the APM penalty.
+
