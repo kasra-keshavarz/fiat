@@ -32,6 +32,7 @@ from dateutil import parser
 # internal imports
 from ..builder import ModelBuilder
 from .funcs import *
+from .funcs import _apply_substitution
 
 # custom types
 # PathLike type alias for file system paths
@@ -925,6 +926,42 @@ class MESH(ModelBuilder):
                         )
         # define parameter bounds (normalized form)
         self.parameter_bounds = normalized_bounds
+
+        # --- inequality constraints (LAMN <= LAMX and friends) ----------
+        # Compile Ostrich records for every ordered-pair inequality
+        # declared in ``constraints.py``.  Only groups/units/classes
+        # where *both* sides of the inequality are calibrated emit
+        # records; other combinations either raise (if the fixed .ini
+        # value is mutually infeasible with the calibration bounds) or
+        # are silent no-ops.  See
+        # :func:`fiatmodel.models.mesh.funcs.build_constraint_records`.
+        (tied_param_lines,
+         tied_respvar_lines,
+         constraint_lines,
+         substitutions) = build_constraint_records(
+             self.parameter_bounds, self.parameters,
+         )
+        self.ordered_pair_tied_params = tied_param_lines
+        self.ordered_pair_tied_resp_vars = tied_respvar_lines
+        self.ordered_pair_constraints = constraint_lines
+        self.ordered_pair_substitutions = substitutions
+
+        # Build a parallel copy of ``templated_parameters`` with the
+        # raw upper-bound names swapped for their clamped ``*_EFF``
+        # tied-parameter names. MESH reads this copy via the rendered
+        # JSON file, so it always runs on ``max(lower, upper)``.  The
+        # pristine ``templated_parameters`` still drives ``BeginParams``
+        # so Ostrich keeps sampling the raw ``LAMX`` in its native
+        # bounds.
+        self.substituted_templated_parameters = copy.deepcopy(
+            self.templated_parameters
+        )
+        for sub in substitutions:
+            _apply_substitution(
+                self.substituted_templated_parameters,
+                sub['group'], sub['unit'], sub['param'],
+                sub['new_name'], class_name=sub['class_name'],
+            )
 
         return
 

@@ -150,6 +150,14 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         info_dict['parameters'] = self.model.templated_parameters
         info_dict['parameter_bounds'] = self.model.parameter_bounds
         info_dict['parameter_constraints'] = self.model.parameter_constraints
+        # Ordered-pair inequality constraints (LAMN <= LAMX and the
+        # like). These lists default to empty when no constraints apply.
+        info_dict['ordered_pair_tied_params'] = getattr(
+            self.model, 'ordered_pair_tied_params', [])
+        info_dict['ordered_pair_tied_resp_vars'] = getattr(
+            self.model, 'ordered_pair_tied_resp_vars', [])
+        info_dict['ordered_pair_constraints'] = getattr(
+            self.model, 'ordered_pair_constraints', [])
 
         # create content
         content = self.template.render(
@@ -192,7 +200,18 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         # within the `model` instance. The values need
         # to be printed into `$OUTPUT_PATH/etc/templates/`
         # directory for OSTRICH to use them.
-        for group, params in self.model.templated_parameters.items():
+        # When the model exposes ``substituted_templated_parameters``
+        # (MESH does, after ``prepare()`` applies the ordered-pair
+        # clamp), use those so MESH receives ``max(LAMN, LAMX)`` etc.
+        # Fall back to the raw ``templated_parameters`` otherwise.
+        src = getattr(
+            self.model,
+            'substituted_templated_parameters',
+            None,
+        )
+        if src is None:
+            src = self.model.templated_parameters
+        for group, params in src.items():
             # create directory for each parameter group
             group_path = os.path.join(
                 output_path,

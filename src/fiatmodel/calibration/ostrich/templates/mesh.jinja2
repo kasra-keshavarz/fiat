@@ -37,6 +37,9 @@ none {{ scale }} none
 {% set parameters = info.get('parameters') %}
 {% set calibration_bounds = info.get('parameter_bounds') %}
 {% set constraints = info.get('parameter_constraints') %}
+{% set ordered_pair_tied_params = info.get('ordered_pair_tied_params') or {} %}
+{% set ordered_pair_tied_resp_vars = info.get('ordered_pair_tied_resp_vars') or [] %}
+{% set ordered_pair_constraints = info.get('ordered_pair_constraints') or [] %}
 {#
    ==================
    Main OSTRICH Block
@@ -297,9 +300,10 @@ BeginParams
 EndParams
 {% endif %}
 
-{% if constraints is defined and constraints is mapping %}
+{% if (constraints is defined and constraints is mapping) or (ordered_pair_tied_params and (ordered_pair_tied_params.get('dist') or ordered_pair_tied_params.get('wsum'))) %}
 # Calibration constraints
 BeginTiedParams
+{% if constraints is defined and constraints is mapping %}
 {#
   FIXME: Implement a systematic constraints definition mechanism
     For now, only focusing on soil parameters for MESH layers; a systematic
@@ -414,5 +418,40 @@ BeginTiedParams
       {%- endfor -%}
     {%- endif -%}
   {%- endfor -%}
+{%- endif %}
+{% if ordered_pair_tied_params and (ordered_pair_tied_params.get('dist') or ordered_pair_tied_params.get('wsum')) %}
+    # Ordered-pair inequality clamp chains (e.g., LAMX_EFF = max(LAMN, LAMX))
+  {% if ordered_pair_tied_params.get('dist') %}
+    # name          np   pname1      pname2      pname3      pname4      type    format
+  {% for line in ordered_pair_tied_params['dist'] %}
+{{ line }}
+  {% endfor %}
+  {% endif %}
+  {% if ordered_pair_tied_params.get('wsum') %}
+    # name          np   pname1      pname2      type    c1     c2     format
+  {% for line in ordered_pair_tied_params['wsum'] %}
+{{ line }}
+  {% endfor %}
+  {% endif %}
+{% endif %}
 EndTiedParams
-{%- endif -%}
+{% endif %}
+
+{% if ordered_pair_tied_resp_vars %}
+BeginTiedRespVars
+    # Signed differences used by the APM penalty constraints below.
+    # name          np   pname1      pname2      type    c1     c2
+  {% for line in ordered_pair_tied_resp_vars %}
+{{ line }}
+  {% endfor %}
+EndTiedRespVars
+{% endif %}
+
+{% if ordered_pair_constraints %}
+BeginConstraints
+    # name                       type     CF            lwr          upr    resp
+  {% for line in ordered_pair_constraints %}
+{{ line }}
+  {% endfor %}
+EndConstraints
+{% endif -%}

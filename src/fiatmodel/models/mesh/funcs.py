@@ -776,6 +776,375 @@ def param_name_gen(
     
     return param_name
 
+def _param_name_for(
+    unit: NameType,
+    param: str,
+    class_name: str = None,
+) -> str:
+    """Resolve the Ostrich parameter name used in the rendered template.
+
+    Mirrors the naming convention used by ``MESH.prepare`` when building
+    ``templated_parameters`` for calibrated parameters.
+
+    Parameters
+    ----------
+    unit : NameType
+        1-based computational unit id (e.g., GRU index).
+    param : str
+        Base parameter name (``'lamn'``, ``'lamx'``, ...).
+    class_name : str, optional
+        Vegetation class name for per-class parameters in mixed-veg GRUs.
+
+    Returns
+    -------
+    str
+        The templated Ostrich parameter name (e.g., ``_6LAMN_NEEDLELEAF``
+        for per-class, or ``_6LAMN`` for single-veg).
+    """
+    if class_name is None:
+        return param_name_gen(unit, param)
+    return param_name_gen(unit, f"{param}_{class_name}")
+
+
+def _constraint_names(
+    unit: NameType,
+    lower: str,
+    upper: str,
+    class_name: str = None,
+):
+    """Build the set of derived Ostrich names used for one inequality.
+
+    Parameters
+    ----------
+    unit : NameType
+        Computational unit id.
+    lower, upper : str
+        Raw parameter names from the constraint expression (lowercased).
+    class_name : str, optional
+        Vegetation class suffix, if the constraint is per-class.
+
+    Returns
+    -------
+    dict
+        Dict with keys ``lo``, ``hi``, ``absd``, ``diff``, ``shift``,
+        ``eff``, ``diffrv``, and ``cname``.
+    """
+    suffix = f"_{class_name.upper()}" if class_name else ''
+    unit_str = str(unit).upper()
+    lo_upper = lower.upper()
+    hi_upper = upper.upper()
+    pair = f"{lo_upper}_{hi_upper}"
+
+    return {
+        'lo': _param_name_for(unit, lower, class_name),
+        'hi': _param_name_for(unit, upper, class_name),
+        'absd':   f"_{unit_str}{pair}_ABSD{suffix}",
+        'diff':   f"_{unit_str}{pair}_DIFF{suffix}",
+        'shift':  f"_{unit_str}{pair}_SHIFT{suffix}",
+        'eff':    f"_{unit_str}{hi_upper}_EFF{suffix}",
+        'diffrv': f"_{unit_str}{pair}_DIFFRV{suffix}",
+        'cname':  f"_{unit_str}_{lo_upper}_LT_{hi_upper}{suffix}",
+    }
+
+
+def _resolve_fixed_value(parameters, group, unit, param, class_name=None):
+    """Look up the ``.ini``-fixed value for a non-calibrated parameter.
+
+    Returns ``None`` if the value cannot be resolved (e.g., the group is
+    not parsed or the parameter is not present). Callers treat ``None``
+    as "unable to cross-check" and skip the consistency assertion.
+    """
+    grp = parameters.get(group)
+    if grp is None:
+        return None
+    if isinstance(grp, dict):
+        unit_data = grp.get(unit)
+    elif isinstance(grp, list):
+        if not isinstance(unit, int) or unit < 1 or unit > len(grp):
+            return None
+        unit_data = grp[unit - 1]
+    else:
+        return None
+
+    if unit_data is None:
+        return None
+
+    if isinstance(unit_data, dict):
+        val = unit_data.get(param)
+        return val if isinstance(val, (int, float)) else None
+    if isinstance(unit_data, list):
+        for veg in unit_data:
+            if class_name is not None and veg.get('class') != class_name:
+                continue
+            val = veg.get(param)
+            if isinstance(val, (int, float)):
+                return val
+            # first match wins when class_name is None
+            if class_name is None and param in veg:
+                return None
+    return None
+
+
+def build_constraint_records(
+    parameter_bounds: Dict,
+    parameters: Dict,
+):
+    """Compile Ostrich records for every inequality declared in CONSTRAINTS.
+
+    Walks :data:`fiatmodel.models.mesh.constraints.CONSTRAINTS` against
+    the calibration bounds and parsed ``.ini`` parameters and produces
+    pre-formatted Ostrich config lines for the clamp chain, the signed
+    difference tied response variable, and the GCOP constraint. Also
+    returns a list of substitutions describing which
+    ``templated_parameters`` entries must swap their raw upper-bound
+    name for the clamped ``*_EFF`` name.
+
+    Only the "both calibrated" scenario emits records. The other three
+    scenarios (one side calibrated, neither calibrated) do not produce
+    Ostrich config but may raise :class:`ValueError` when the fixed
+    ``.ini`` value and the calibration bounds are mutually infeasible;
+    those cross-checks are handled by the caller in
+    :meth:`fiatmodel.models.mesh.model.MESH.prepare`.
+
+    Parameters
+    ----------
+    parameter_bounds : dict
+        Normalized parameter bounds, shape
+        ``{group: {unit: {param: bounds_or_per_class_dict}}}``.
+    parameters : dict
+        Parsed MESH parameters.
+
+    Returns
+    -------
+    tuple
+        ``(tied_param_lines, tied_respvar_lines, constraint_lines,
+        substitutions)`` where the first three are lists of pre-formatted
+        strings and ``substitutions`` is a list of dicts with keys
+        ``group``, ``unit``, ``class_name``, ``param``, and ``new_name``.
+    """
+    # Late import to keep ``from .funcs import *`` clean of the
+    # CONSTRAINTS symbol.
+    from .constraints import iter_constraints
+
+    tied_param_lines = {'dist': [], 'wsum': []}
+    tied_respvar_lines = []
+    constraint_lines = []
+    substitutions = []
+
+    for group, group_bounds in (parameter_bounds or {}).items():
+        if not isinstance(group_bounds, dict):
+            continue
+
+        # Iterate every constraint declared for this group.
+        for lower, upper, _strict, opts in iter_constraints(group):
+            clamp = opts.get('clamp', True)
+            cost_factor = float(opts.get('cost_factor', 1.0e6))
+
+            for unit, unit_bounds in group_bounds.items():
+                if not isinstance(unit_bounds, dict):
+                    continue
+
+                lo_bnd = unit_bounds.get(lower)
+                hi_bnd = unit_bounds.get(upper)
+
+                # Detect per-class scope from either side being a
+                # per-class dict. When only one side is per-class and
+                # the other is a flat list, reuse the list bounds across
+                # every class seen on the per-class side.
+                classes = None
+                if isinstance(lo_bnd, dict) or isinstance(hi_bnd, dict):
+                    classes = set()
+                    if isinstance(lo_bnd, dict):
+                        classes |= set(lo_bnd.keys())
+                    if isinstance(hi_bnd, dict):
+                        classes |= set(hi_bnd.keys())
+
+                if classes is None:
+                    iter_items = [(None, lo_bnd, hi_bnd)]
+                else:
+                    iter_items = []
+                    for cls in sorted(classes):
+                        lb = lo_bnd.get(cls) if isinstance(lo_bnd, dict) else lo_bnd
+                        ub = hi_bnd.get(cls) if isinstance(hi_bnd, dict) else hi_bnd
+                        iter_items.append((cls, lb, ub))
+
+                for cls, lb, ub in iter_items:
+                    lo_calibrated = lb is not None
+                    hi_calibrated = ub is not None
+
+                    if lo_calibrated and hi_calibrated:
+                        # Scenario 1: both calibrated.  Emit Ostrich
+                        # records for the clamp chain and the APM
+                        # penalty.
+                        _emit_records(
+                            unit, lower, upper, cls, cost_factor, clamp,
+                            tied_param_lines, tied_respvar_lines,
+                            constraint_lines, substitutions, group,
+                        )
+                    elif lo_calibrated and not hi_calibrated:
+                        # Scenario 2: lower is calibrated, upper is a
+                        # fixed ``.ini`` value.  Cross-check that the
+                        # calibration upper bound of the lower parameter
+                        # cannot exceed the fixed upper.
+                        fixed_hi = _resolve_fixed_value(
+                            parameters, group, unit, upper, cls)
+                        if fixed_hi is not None:
+                            lo_max = _bounds_hi(lb)
+                            if lo_max is not None and lo_max > fixed_hi:
+                                raise ValueError(
+                                    f"Infeasible inequality "
+                                    f"{lower!r} <= {upper!r} in group "
+                                    f"{group!r}, unit {unit!r}"
+                                    f"{f', class {cls!r}' if cls else ''}: "
+                                    f"calibration upper bound of "
+                                    f"{lower!r} is {lo_max}, but "
+                                    f"{upper!r} is fixed at {fixed_hi} "
+                                    f"in the model .ini."
+                                )
+                    elif hi_calibrated and not lo_calibrated:
+                        # Scenario 3: upper is calibrated, lower is a
+                        # fixed ``.ini`` value.  Cross-check that the
+                        # calibration lower bound of the upper parameter
+                        # cannot fall below the fixed lower.
+                        fixed_lo = _resolve_fixed_value(
+                            parameters, group, unit, lower, cls)
+                        if fixed_lo is not None:
+                            hi_min = _bounds_lo(ub)
+                            if hi_min is not None and hi_min < fixed_lo:
+                                raise ValueError(
+                                    f"Infeasible inequality "
+                                    f"{lower!r} <= {upper!r} in group "
+                                    f"{group!r}, unit {unit!r}"
+                                    f"{f', class {cls!r}' if cls else ''}: "
+                                    f"calibration lower bound of "
+                                    f"{upper!r} is {hi_min}, but "
+                                    f"{lower!r} is fixed at {fixed_lo} "
+                                    f"in the model .ini."
+                                )
+                    # Scenario 4: neither calibrated — no-op.
+
+    return (
+        tied_param_lines,
+        tied_respvar_lines,
+        constraint_lines,
+        substitutions,
+    )
+
+
+def _bounds_lo(bnd):
+    """Return the lower numeric value of a bounds entry or ``None``."""
+    if isinstance(bnd, (list, tuple)) and len(bnd) >= 2:
+        v = bnd[0]
+        return v if isinstance(v, (int, float)) else None
+    return None
+
+
+def _bounds_hi(bnd):
+    """Return the upper numeric value of a bounds entry or ``None``."""
+    if isinstance(bnd, (list, tuple)) and len(bnd) >= 2:
+        v = bnd[1]
+        return v if isinstance(v, (int, float)) else None
+    return None
+
+
+def _emit_records(
+    unit, lower, upper, class_name, cost_factor, clamp,
+    tied_param_lines, tied_respvar_lines,
+    constraint_lines, substitutions, group,
+):
+    """Append the 4 clamp-chain + 1 respvar + 1 constraint lines.
+
+    The formulas build ``LAMX_EFF = max(LAMN, LAMX)`` via the identity
+    ``max(0, x) = (x + |x|) / 2`` where ``|x|`` is derived from the
+    ``dist`` tied-parameter type: with ``y1 = y2 = LAMN``, the distance
+    collapses to ``|x1 - x2| = |LAMN - LAMX|``.
+    """
+    names = _constraint_names(unit, lower, upper, class_name)
+
+    if clamp:
+        # ``|LAMN - LAMX|`` — reuse LAMN as both y-coordinates so the
+        # y-term cancels in the ``dist`` formula. This avoids needing a
+        # separate constant-zero helper.
+        tied_param_lines['dist'].append(
+            f"  {names['absd']}  4  {names['lo']}  {names['lo']}  "
+            f"{names['hi']}  {names['lo']}  dist  free"
+        )
+        # ``LAMN - LAMX``
+        tied_param_lines['wsum'].append(
+            f"  {names['diff']}  2  {names['lo']}  {names['hi']}  "
+            f"wsum  1.0  -1.0  free"
+        )
+        # ``max(0, LAMN - LAMX) = (DIFF + ABSD) / 2``
+        tied_param_lines['wsum'].append(
+            f"  {names['shift']}  2  {names['diff']}  {names['absd']}  "
+            f"wsum  0.5  0.5  free"
+        )
+        # ``LAMX_EFF = LAMX + max(0, LAMN - LAMX) = max(LAMN, LAMX)``
+        tied_param_lines['wsum'].append(
+            f"  {names['eff']}  2  {names['hi']}  {names['shift']}  "
+            f"wsum  1.0  1.0  free"
+        )
+        # Tell ``prepare`` to substitute the effective name in the
+        # ``.json`` template fed to MESH so the model never runs on an
+        # infeasible pair.
+        substitutions.append({
+            'group': group,
+            'unit': unit,
+            'class_name': class_name,
+            'param': upper,
+            'new_name': names['eff'],
+        })
+
+    # Signed difference as a tied *response* variable — the GCOP
+    # constraints section cannot reference tied parameters directly.
+    tied_respvar_lines.append(
+        f"  {names['diffrv']}  2  {names['lo']}  {names['hi']}  "
+        f"wsum  1.0  -1.0"
+    )
+    # APM penalty: violation is ``max(0, DIFF) = max(0, LAMN - LAMX)``.
+    # ``lwr = -1.0E99`` ensures only positive DIFF (infeasible) is
+    # penalized; ``CF`` controls the weight.
+    constraint_lines.append(
+        f"  {names['cname']}  general  {cost_factor:.6E}  "
+        f"-1.0E99  0.0  {names['diffrv']}"
+    )
+
+
+def _apply_substitution(templated_parameters, group, unit, param,
+                        new_name, class_name=None):
+    """Swap a raw templated-parameter name for its clamped equivalent.
+
+    Mutates ``templated_parameters`` in place so the JSON file rendered
+    for MESH receives the effective (clamped) name instead of the raw
+    Ostrich sampling parameter. Silent no-op when the target entry
+    cannot be resolved (defensive — validation has already been run by
+    ``_check_param_exists``).
+    """
+    grp = templated_parameters.get(group)
+    if grp is None:
+        return
+    if isinstance(grp, dict):
+        unit_data = grp.get(unit)
+    elif isinstance(grp, list):
+        if not isinstance(unit, int) or unit < 1 or unit > len(grp):
+            return
+        unit_data = grp[unit - 1]
+    else:
+        return
+
+    if isinstance(unit_data, dict):
+        if param in unit_data:
+            unit_data[param] = new_name
+    elif isinstance(unit_data, list):
+        for veg in unit_data:
+            if class_name is not None and veg.get('class') != class_name:
+                continue
+            if param in veg:
+                veg[param] = new_name
+                if class_name is not None:
+                    break
+
+
 def parse_parameters_nc(
     nc_file: os.PathLike | str,
 ) -> Dict[str, float]:
