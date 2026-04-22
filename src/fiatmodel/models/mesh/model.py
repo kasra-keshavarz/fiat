@@ -530,6 +530,13 @@ class MESH(ModelBuilder):
             for d in [hyd1_params, hyd2_params, soil_params,
                       prog1_params, prog2_params, prog3_params]:
                 shared_params.update(d)
+            # ``mid_id`` is a GRU identifier (used as the outer key of
+            # ``gru_entry`` below), not a CLASS parameter. Drop it from
+            # ``shared_params`` so it is not emitted inside each GRU's
+            # inner dict in ``class.json`` (meshflow's
+            # ``_extract_class_params`` rejects keys absent from
+            # ``default_CLASS_lines.json``).
+            shared_params.pop('mid_id', None)
 
             # determine water-like override from the MID descriptor
             is_water = any(
@@ -750,11 +757,11 @@ class MESH(ModelBuilder):
             for i in range(1, 4):
                 # iterate over the parameter template values
                 for p in constraints_params_template:
-                    # create the parameter name
+                    # create the parameter name: e.g., sand1, clay2, etc.
                     param_name = f"{p.lower()}{i}"
                     # append to the list
                     constraint_params.append(param_name)
-            
+
             # calibration constraints for each class computation unit
             # FIXME: kind of hard-coded assumption that the `class` parameters
             #        are the only ones that need constraints. This should be
@@ -782,6 +789,23 @@ class MESH(ModelBuilder):
                     'class': calibration_constraints,
                 }
 
+                # LAMN/LAMX ordered-pair handling:
+                #   * Rename the templated names of every calibrated lamn/lamx
+                #     entry to the ``_<U>LMN[suffix]_`` / ``_<U>LMX[suffix]_``
+                #     convention (trailing underscore, mirroring the CLAY/SAND
+                #     disambiguation trick). For case-4 ``lamx`` the stored name
+                #     is instead overridden to ``_<U>LAMX_EFF[suffix]`` so that
+                #     the model-facing value in ``class.json`` comes from the
+                #     TiedParams block emitted in the Ostrich input.
+                #   * Validate case-2 and case-3 bound-vs-actual relationships
+                #     and raise a clear ``ValueError`` on violation.
+                #   * Record only case-4 entries under the new
+                #     ``'class_lam'`` key so the Jinja template knows which
+                #     (unit, class) pairs need the 4-line TiedParams block.
+                class_lam_constraints = self._compute_class_lam_constraints()
+                if class_lam_constraints:
+                    self._parameter_constraints['class_lam'] = class_lam_constraints
+
         return getattr(self, '_parameter_constraints')
     @parameter_constraints.setter
     def parameter_constraints(self, value: List[str]) -> None:
@@ -797,6 +821,166 @@ class MESH(ModelBuilder):
         self._parameter_constraints = value
 
         return
+
+    def _compute_class_lam_constraints(self) -> Dict:
+        """Classify LAMN/LAMX calibration cases and rename templated names.
+
+        Walks every ``(unit, class?)`` pair in
+        ``self.parameter_bounds['class']`` and classifies the ``lamn`` /
+        ``lamx`` calibration entries into one of four cases:
+
+        * Case 1 — neither ``lamn`` nor ``lamx`` calibrated: no-op.
+        * Case 2 — only ``lamn`` calibrated: validate
+          ``lamn.upper <= actual_lamx`` of that unit/class; on violation
+          raise :class:`ValueError`.
+        * Case 3 — only ``lamx`` calibrated: validate
+          ``lamx.lower >= actual_lamn`` of that unit/class; on violation
+          raise :class:`ValueError`.
+        * Case 4 — both calibrated: record the ``(unit, class?)`` entry
+          in the returned mapping so the OSTRICH TiedParams block is
+          emitted for it.
+
+        For every calibrated ``lamn`` / ``lamx`` entry (cases 2/3/4)
+        this method also rewrites the corresponding string inside
+        ``self.templated_parameters['class']`` in place:
+
+        * ``_<U>LAMN[suffix]`` → ``_<U>LMN[suffix]_``
+        * ``_<U>LAMX[suffix]`` → ``_<U>LMX[suffix]_``
+
+        For case-4 entries, the ``lamx`` string is instead set to
+        ``_<U>LAMX_EFF[suffix]`` so that the model-facing value in
+        ``class.json`` is produced by the 4-line TiedParams block.
+
+        Returns
+        -------
+        dict
+            Mapping ``{unit: {class_name_or_None: True}}`` containing
+            only case-4 entries. Empty dict if no unit/class is in
+            case 4.
+        """
+        def _rename_proxy(name: str) -> str:
+            return name.replace('LAMN', 'LMN').replace('LAMX', 'LMX') + '_'
+
+        def _rename_eff(name: str) -> str:
+            return name.replace('LAMX', 'LAMX_EFF')
+
+        class_bounds = self.parameter_bounds.get('class', {}) or {}
+        class_params = self.parameters.get('class', {}) or {}
+        class_templated = self.templated_parameters.get('class', {}) or {}
+
+        class_lam: Dict = {}
+
+        for unit, unit_bounds in class_bounds.items():
+            if not isinstance(unit_bounds, dict):
+                continue
+            unit_data = class_params.get(unit)
+            unit_templated = class_templated.get(unit)
+
+            lamn_raw = unit_bounds.get('lamn')
+            lamx_raw = unit_bounds.get('lamx')
+
+            # Build a list of (class_name_or_None, lamn_bnd, lamx_bnd,
+            #                  actual_lamn, actual_lamx, target_dict)
+            # where ``target_dict`` is the dict in templated_parameters
+            # that holds the ``lamn`` / ``lamx`` keys we may rewrite.
+            entries = []
+
+            if isinstance(unit_data, dict):
+                # Single-veg GRU
+                entries.append((
+                    None,
+                    lamn_raw if isinstance(lamn_raw, list) else None,
+                    lamx_raw if isinstance(lamx_raw, list) else None,
+                    unit_data.get('lamn'),
+                    unit_data.get('lamx'),
+                    unit_templated if isinstance(unit_templated, dict) else None,
+                ))
+            elif isinstance(unit_data, list):
+                # Mixed-veg GRU: per-class resolution
+                for i, veg_dict in enumerate(unit_data):
+                    cls = veg_dict.get('class')
+                    lamn_bnd = None
+                    lamx_bnd = None
+                    if isinstance(lamn_raw, dict):
+                        lamn_bnd = lamn_raw.get(cls)
+                    if isinstance(lamx_raw, dict):
+                        lamx_bnd = lamx_raw.get(cls)
+                    target = None
+                    if (isinstance(unit_templated, list)
+                            and i < len(unit_templated)
+                            and isinstance(unit_templated[i], dict)):
+                        target = unit_templated[i]
+                    entries.append((
+                        cls,
+                        lamn_bnd,
+                        lamx_bnd,
+                        veg_dict.get('lamn'),
+                        veg_dict.get('lamx'),
+                        target,
+                    ))
+            else:
+                continue
+
+            for cls, lamn_bnd, lamx_bnd, actual_lamn, actual_lamx, target in entries:
+                has_lamn = isinstance(lamn_bnd, (list, tuple)) and len(lamn_bnd) >= 2
+                has_lamx = isinstance(lamx_bnd, (list, tuple)) and len(lamx_bnd) >= 2
+
+                # Case 1: neither calibrated — nothing to do.
+                if not has_lamn and not has_lamx:
+                    continue
+
+                # Case 2: only lamn — validate upper bound vs actual lamx.
+                if has_lamn and not has_lamx:
+                    if isinstance(actual_lamx, (int, float)) and lamn_bnd[1] > actual_lamx:
+                        raise ValueError(
+                            f"Invalid `lamn` calibration range for GRU "
+                            f"{unit!r}"
+                            + (f" (class {cls!r})" if cls is not None else "")
+                            + f": upper bound {lamn_bnd[1]} exceeds the "
+                            f"actual LAMX value {actual_lamx}. Reduce the "
+                            f"`lamn` upper bound so that lamn <= lamx is "
+                            f"guaranteed during sampling."
+                        )
+
+                # Case 3: only lamx — validate lower bound vs actual lamn.
+                if has_lamx and not has_lamn:
+                    if isinstance(actual_lamn, (int, float)) and lamx_bnd[0] < actual_lamn:
+                        raise ValueError(
+                            f"Invalid `lamx` calibration range for GRU "
+                            f"{unit!r}"
+                            + (f" (class {cls!r})" if cls is not None else "")
+                            + f": lower bound {lamx_bnd[0]} is below the "
+                            f"actual LAMN value {actual_lamn}. Raise the "
+                            f"`lamx` lower bound so that lamn <= lamx is "
+                            f"guaranteed during sampling."
+                        )
+
+                # Rename the templated proxy names for any calibrated
+                # lamn/lamx entry (cases 2, 3, 4).
+                if target is not None:
+                    if has_lamn and isinstance(target.get('lamn'), str):
+                        target['lamn'] = _rename_proxy(target['lamn'])
+                    if has_lamx and isinstance(target.get('lamx'), str):
+                        target['lamx'] = _rename_proxy(target['lamx'])
+
+                # Case 4: both calibrated — record + override lamx with EFF.
+                if has_lamn and has_lamx:
+                    class_lam.setdefault(unit, {})[cls] = True
+                    if target is not None and isinstance(target.get('lamx'), str):
+                        # target['lamx'] is already the renamed
+                        # ``_<U>LMX[suffix]_``; swap it for the EFF name
+                        # derived from the ORIGINAL param_name_gen form.
+                        # Reconstruct the suffix from the renamed string
+                        # by stripping the leading ``_<unit>LMX`` and the
+                        # trailing ``_``: what's left is the suffix
+                        # (possibly empty for single-veg).
+                        renamed = target['lamx']
+                        prefix = '_' + str(unit) + 'LMX'
+                        assert renamed.startswith(prefix) and renamed.endswith('_')
+                        suffix = renamed[len(prefix):-1]
+                        target['lamx'] = '_' + str(unit) + 'LAMX_EFF' + suffix
+
+        return class_lam
 
     def prepare(self) -> None:
         """Prepare templated parameters, bounds, and constraints for calibration.

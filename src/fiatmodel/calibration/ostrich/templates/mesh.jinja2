@@ -217,6 +217,11 @@ BeginParams
                 {# Adding a silt parameter with fixed value of 0.0, min of 0.0, and max of 50.0 #}
     {{ silt_name }} 0.0  0.0  50.0 none none none free
               {% endif %}
+            {% elif 'LAMX_EFF' in param_name %}
+              {# Case-4 lamx: templated name is _<U>LAMX_EFF<suffix> (the tied
+                 output). The calibration parameter proper is the _<U>LMX<suffix>_
+                 proxy referenced by the TiedParams block. Rewrite accordingly. #}
+              {% set param_name = param_name | replace('LAMX_EFF', 'LMX') ~ '_' %}
             {% endif %}
             {# so far, we were able to get the parameter name #}
     {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} {{ tx_fields(bounds) }} free
@@ -244,6 +249,9 @@ BeginParams
                       {% set _ = silt.included.append(silt_name) %}
     {{ silt_name }} 0.0  0.0  50.0 none none none free
                     {% endif %}
+                  {% elif 'LAMX_EFF' in param_name %}
+                    {# Case-4 lamx in a mixed-veg GRU — see single-veg note above. #}
+                    {% set param_name = param_name | replace('LAMX_EFF', 'LMX') ~ '_' %}
                   {% endif %}
     {{ param_name }}  {{ class_bounds[0] }}   {{ class_bounds[0] }}   {{ class_bounds[1] }} {{ tx_fields(class_bounds) }} free
                 {% endif %}
@@ -269,6 +277,10 @@ BeginParams
                       {% set _ = silt.included.append(silt_name) %}
     {{ silt_name }} 0.0  0.0  50.0 none none none free
                     {% endif %}
+                  {% elif 'LAMX_EFF' in param_name %}
+                    {# Case-4 lamx at the GRU level — defensive; lamn/lamx are
+                       currently always veg-specific (see _CLASS_VEG_PARAMS). #}
+                    {% set param_name = param_name | replace('LAMX_EFF', 'LMX') ~ '_' %}
                   {% endif %}
     {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} {{ tx_fields(bounds) }} free
                 {% endif %}
@@ -297,7 +309,28 @@ BeginParams
 EndParams
 {% endif %}
 
+{#
+  Precompute whether ``BeginTiedParams`` will have any content so that the
+  block is suppressed when empty. Two producers populate it today:
+    1. ``constraints.class`` entries whose match list is non-empty
+       (the soil CLAY/SAND TiedParams loop below).
+    2. ``constraints.class_lam`` non-empty (the LAMN/LAMX ordered-pair
+       block further down).
+  When adding a new producer, extend ``tied.has`` accordingly or the new
+  output will be silently suppressed.
+#}
+{% set tied = namespace(has=false) %}
 {% if constraints is defined and constraints is mapping %}
+  {% set _cl = constraints.get('class_lam') %}
+  {% if _cl is mapping and _cl %}{% set tied.has = true %}{% endif %}
+  {% set _cm = constraints.get('class') %}
+  {% if _cm is mapping %}
+    {% for _u, _m in _cm.items() %}
+      {% if _m %}{% set tied.has = true %}{% endif %}
+    {% endfor %}
+  {% endif %}
+{% endif %}
+{% if tied.has %}
 # Calibration constraints
 BeginTiedParams
 {#
@@ -414,5 +447,40 @@ BeginTiedParams
       {%- endfor -%}
     {%- endif -%}
   {%- endfor -%}
+{#
+   LAMN/LAMX ordered-pair TiedParams (case 4 only)
+   ===============================================
+   For every (unit, class?) pair listed under ``constraints.class_lam``
+   emit the four-line block that yields an effective upper
+   ``_<U>LAMX_EFF<suffix> = max(LAMN, LAMX)`` from the calibration
+   proxies ``_<U>LMN<suffix>_`` and ``_<U>LMX<suffix>_``. The
+   positive-part construction below matches the mathematical identity
+   ``max(a, b) = b + max(0, a - b) = b + (|a - b| + (a - b)) / 2``.
+#}
+{% set class_lam = constraints.get('class_lam') if constraints is mapping else none %}
+{% if class_lam is mapping %}
+  {% for unit, class_map in class_lam.items() %}
+    {% if class_map is mapping %}
+      {% for cls, _flag in class_map.items() %}
+        {% set suffix = ('_' ~ (cls | upper)) if cls is string else '' %}
+        {% set lmn = '_' ~ unit ~ 'LMN' ~ suffix ~ '_' %}
+        {% set lmx = '_' ~ unit ~ 'LMX' ~ suffix ~ '_' %}
+        {% set absd = '_' ~ unit ~ 'LAMN_LAMX_ABSD' ~ suffix %}
+        {% set diff = '_' ~ unit ~ 'LAMN_LAMX_DIFF' ~ suffix %}
+        {% set shift = '_' ~ unit ~ 'LAMN_LAMX_SHIFT' ~ suffix %}
+        {% set eff = '_' ~ unit ~ 'LAMX_EFF' ~ suffix %}
+    # Computational unit #{{ unit }}{% if cls is string %} ({{ cls }}){% endif %} LAMN/LAMX ordered-pair constraint
+    # |LAMN - LAMX| via dist (y1 = y2 collapses the y-term)
+    {{ absd }}   4   {{ lmn }}   {{ lmn }}   {{ lmx }}   {{ lmn }}   dist   free
+    # signed difference LAMN - LAMX
+    {{ diff }}   2   {{ lmn }}   {{ lmx }}   wsum   1.0   -1.0   free
+    # positive-part shift: max(0, LAMN - LAMX) = (DIFF + ABSD) / 2
+    {{ shift }}  2   {{ diff }}   {{ absd }}   wsum   0.5   0.5   free
+    # effective upper: LAMX + shift = max(LAMN, LAMX)
+    {{ eff }}    2   {{ lmx }}   {{ shift }}   wsum   1.0   1.0   free
+      {% endfor %}
+    {%- endif -%}
+  {%- endfor -%}
+{%- endif %}
 EndTiedParams
 {%- endif -%}
