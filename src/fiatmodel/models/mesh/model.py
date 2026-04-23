@@ -850,9 +850,8 @@ class MESH(ModelBuilder):
 
             if isinstance(unit_data, dict):
                 # Single-veg GRU
-                cls = unit_data.get('class', 'default')
                 entries.append((
-                    cls,
+                    None, # if cls is provided, it becomes confused with multi-vegetated GRU
                     lamn_raw if isinstance(lamn_raw, list) else None,
                     lamx_raw if isinstance(lamx_raw, list) else None,
                     unit_data.get('lamn'),
