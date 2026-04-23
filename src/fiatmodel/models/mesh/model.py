@@ -43,6 +43,13 @@ else:
 # NameType type alias for parameter names
 NameType = Union[str, int, float]
 
+# useful functions for string formatting
+def _rename_proxy(name: str) -> str:
+    return name.replace('LAMN', 'LMN').replace('LAMX', 'LMX') + '_'
+
+def _rename_eff(name: str) -> str:
+    return name.replace('LAMX', 'LAMX_EFF')
+
 class MESH(ModelBuilder):
     """Builder for the MESH calibration instantiation.
 
@@ -410,6 +417,538 @@ class MESH(ModelBuilder):
         # if we reach here, all checks passed, so return True
         return True
 
+    def analyze(self, cache: PathLike = None) -> None:
+        """Analyze configuration and populate model parameters and outputs.
+
+        Parameters
+        ----------
+        cache : PathLike, optional
+            Optional cache directory for analysis artifacts (currently unused).
+        """
+        # perform sanity checks
+        self.sanity_check()
+
+        # given that sanity checks are passed, we can define the output
+        # files
+        for f in self.fluxes:
+            # FIXME: only netcdf files are currenlty support with MESH
+            output_file = f"{f.upper()}_{self.forcing_freq.upper()}_GRD.nc"
+            self.outputs.append(output_file)
+
+        # analyze the CLASS file and build the parameter dictionaries
+        # for MESH's specific parameter analysis functions, the `case_entry`
+        # and `info_entry` dictionaries are also returned, but not used in
+        # calibration process
+        case_entry, info_entry, class_dict = self._analyze_mesh_class()
+
+        # analyze hydrology and routing files and build the parameter dictionaries
+        routing_dict, hydrology_dict = self._analyze_mesh_hydrology()
+
+        # model's raw parameters dictionary
+        # the keys are hard-coded and documented in the model-specific
+        # MESH builder documentation
+        self.parameters = {
+            'class': class_dict,
+            'hydrology': hydrology_dict,
+            'routing': routing_dict,
+        }
+
+        self.others = {
+            'case_entry': {
+                'type': 'json',
+                'data': case_entry,
+            },
+            'info_entry': {
+                'type': 'json',
+                'data': info_entry,
+            },
+            'parameters_ds': {
+                'type': 'nc',
+                'data': parse_parameters_nc(
+                    os.path.join(self.config['instance_path'], 'MESH_parameters.nc')),
+            },
+        }
+
+        # add the step logger entry
+        self.step_logger['analyze'] = True
+
+        return
+
+    @property
+    def computational_units(self) -> Dict[str, int]:
+        """Counts of computational units per parameter group.
+
+        Returns
+        -------
+        dict[str, int]
+            Counts for each parameter group present after analysis.
+        """
+        if self.step_logger['analyze']:
+            return {
+                'class_dict': len(self.parameters['class_dict']),
+                'hydrology_dict': len(self.parameters['hydrology_dict']),
+                'routing_dict': len(self.parameters['routing_dict']),
+            }
+        else:
+            raise RuntimeError(
+                "The `analyze` method must be called before accessing "
+                "the `computational_units` property."
+            )
+
+        return
+
+    @property
+    def parameter_constraints(self):
+        """Hard-coded and user-extendable parameter constraints.
+
+        The mathematical representations are documented in the MESH builder
+        guide. A setter is provided to allow users to supply additional
+        constraints.
+
+        Returns
+        -------
+        dict
+            Current constraints mapping by parameter group.
+        """
+        # define a list of parameters that need to be included in contraints
+        # these are MESH-specific --- hard-coded values
+        if isinstance(self._parameter_constraints, dict) and len(self._parameter_constraints) == 0:
+            constraints_params_template = ['clay', 'sand']
+            # and building invidiual parameters present in all MESH configurations
+            constraint_params = []
+
+            # default is assuming MESH has 3 soil layers -- hard-coded
+            # FIXME: the 3 layer assumption should be revisited in future releases
+            #        both in FIAT-specific MESH builder and MESHFlow package.
+            for i in range(1, 4):
+                # iterate over the parameter template values
+                for p in constraints_params_template:
+                    # create the parameter name: e.g., sand1, clay2, etc.
+                    param_name = f"{p.lower()}{i}"
+                    # append to the list
+                    constraint_params.append(param_name)
+
+            # calibration constraints for each class computation unit
+            # FIXME: kind of hard-coded assumption that the `class` parameters
+            #        are the only ones that need constraints. This should be
+            #        revisited in future releases.
+            calibration_constraints = {}
+
+            for unit in self.parameter_bounds['class'].keys():
+                # creating a set of parameters for the computational
+                # unit to be calibrated
+                calibrated_set = set(self.parameter_bounds['class'][unit].keys())
+
+                # check whether any of `constrain_params` elements are available
+                # in each computational unit's set of parameters
+                match = [x for _, x in enumerate(constraint_params) if x in calibrated_set]
+
+                # set it aside if match is found
+                if match is not None:
+                    calibration_constraints[unit] = match
+
+            if self.step_logger['analyze']:
+                # hard-coded parameter constraints for MESH model parameters
+                # the keys are hard-coded and documented in the model-specific
+                # MESH builder documentation
+                self._parameter_constraints = {
+                    'class': calibration_constraints,
+                }
+
+                # LAMN/LAMX ordered-pair handling:
+                #   * Rename the templated names of every calibrated lamn/lamx
+                #     entry to the ``_<U>LMN[suffix]_`` / ``_<U>LMX[suffix]_``
+                #     convention (trailing underscore, mirroring the CLAY/SAND
+                #     disambiguation trick). For case-4 ``lamx`` the stored name
+                #     is instead overridden to ``_<U>LAMX_EFF[suffix]`` so that
+                #     the model-facing value in ``class.json`` comes from the
+                #     TiedParams block emitted in the Ostrich input.
+                #   * Validate case-2 and case-3 bound-vs-actual relationships
+                #     and raise a clear ``ValueError`` on violation.
+                #   * Record only case-4 entries under the new
+                #     ``'class_lam'`` key so the Jinja template knows which
+                #     (unit, class) pairs need the 4-line TiedParams block.
+                #   Note: case-4 is when both LAMX and LAMN of a computational unit
+                #         are included for the calibration. In this case, the
+                #         calibration mechanism needs to assure the following
+                #         constraint is satisfied: LAMX >= LAMN.
+                class_lam_constraints = self._compute_class_lam_constraints()
+                if class_lam_constraints:
+                    self._parameter_constraints['class_lam'] = class_lam_constraints
+
+        return getattr(self, '_parameter_constraints')
+    @parameter_constraints.setter
+    def parameter_constraints(self, value: List[str]) -> None:
+        """Set the parameter constraints mapping.
+
+        Parameters
+        ----------
+        value : dict
+            Constraints organized by parameter group and unit.
+        """
+        if not isinstance(value, dict):
+            raise TypeError('`parameter_constraints` must be a dictionary')
+        self._parameter_constraints = value
+
+        return
+
+    def prepare(self) -> None:
+        """Prepare templated parameters, bounds, and constraints for calibration.
+
+        Ensures analysis is complete, constructs ``templated_parameters`` by
+        substituting calibratable names, and assigns bounds from configuration.
+        """
+        # check whether the instance has been analyzed
+        if not self.step_logger['analyze']:
+            self.analyze()
+
+        # given the parameter bounds in self.config['parameter_bounds'],
+        # the necessary parameter dictionaries are templated and saved
+
+        # Normalize list-of-dicts bounds for mixed-veg GRUs:
+        # Users may supply a list of dicts (each with a 'class' key) for
+        # mixed-veg GRUs.  Normalize them into a single dict where veg
+        # params map to {class_name: [min, max]} and GRU-level params map
+        # to [min, max] (widest range across all dicts).
+        normalized_bounds = copy.deepcopy(self.config['parameter_bounds'])
+
+        # Validate every bounds entry once up front so errors are reported
+        # before any templating work. This walker enforces three properties:
+        #   1) the bounds entry itself is well-formed (delegated to
+        #      ``parse_param_bounds``);
+        #   2) logarithmic sampling is not requested for clay/sand soil
+        #      parameters, which are tied via ``BeginTiedParams`` ratio
+        #      constraints and must remain linear;
+        #   3) each ``(group, unit, name)`` key resolves to a real parameter
+        #      in ``self.parameters`` — this prevents a downstream Jinja2
+        #      ``'NoneType' is not iterable`` crash when the user references
+        #      a parameter that does not exist in the parsed model inputs.
+        for _gname, _gdict in normalized_bounds.items():
+            if not isinstance(_gdict, dict):
+                continue
+            for _unit, _unit_bounds in _gdict.items():
+                if isinstance(_unit_bounds, list):
+                    # Mixed-veg form: list of per-class dicts
+                    for _veg_dict in _unit_bounds:
+                        _cls = _veg_dict.get('class')
+                        for _p, _bnd in _veg_dict.items():
+                            if _p == 'class':
+                                continue
+                            self._walk_bounds(_gname, _unit, _p, _bnd,
+                                         class_name=_cls)
+                elif isinstance(_unit_bounds, dict):
+                    for _p, _bnd in _unit_bounds.items():
+                        if isinstance(_bnd, dict):
+                            # per-class dict: {class_name: [min,max[,scale]]}
+                            for _cls, _cbnd in _bnd.items():
+                                self._walk_bounds(_gname, _unit, _p, _cbnd,
+                                             class_name=_cls)
+                        else:
+                            self._walk_bounds(_gname, _unit, _p, _bnd)
+
+        if 'class' in normalized_bounds:
+            for unit, unit_bounds in normalized_bounds['class'].items():
+                unit_data = self.parameters['class'][unit]
+                if isinstance(unit_bounds, list) and not isinstance(unit_data, list):
+                    raise ValueError(
+                        f"GRU {unit} (class '{unit_data['class']}') is a "
+                        f"single-vegetation GRU, but a list of mixed-vegetation "
+                        f"bounds was provided. Use a single dictionary instead."
+                    )
+                if isinstance(unit_bounds, dict) and isinstance(unit_data, list):
+                    veg_classes = [v['class'] for v in unit_data]
+                    raise ValueError(
+                        f"GRU {unit} is a mixed-vegetation GRU with classes "
+                        f"{veg_classes}, but a single dictionary of bounds was "
+                        f"provided. Use a list of dictionaries (one per "
+                        f"vegetation class) instead."
+                    )
+                if isinstance(unit_bounds, list):
+                    normalized_bounds['class'][unit] = \
+                        normalize_mixed_veg_bounds(unit_bounds)
+
+        # initialize the `templated_parameters` dictionary
+        self.templated_parameters = self.parameters.copy()
+
+        # define parameter names that will be involved
+        # in the calibration process
+        for group_name, group in normalized_bounds.items():
+            # building the templated_parameters dictionary
+            # for each parameter group in the `parameters` dictionary
+            for unit in group.keys():
+                # iterate over the computational units
+                # update the values of parameters in each unit
+                unit_params = group[unit]
+                # input can be either a dictionary or a list
+                for p, bounds in unit_params.items():
+                    if isinstance(self.parameters[group_name], dict):
+                        unit_data = self.parameters[group_name][unit]
+
+                        if isinstance(unit_data, list):
+                            # Mixed-veg GRU: unit_data is a list of veg dicts
+                            if isinstance(bounds, dict):
+                                # Veg-specific param: bounds is {class_name: [min, max]}
+                                for i, veg_dict in enumerate(unit_data):
+                                    class_type = veg_dict['class']
+                                    if class_type in bounds and p in veg_dict:
+                                        self.templated_parameters[group_name][unit][i][p] = \
+                                            param_name_gen(unit, f"{p}_{class_type}")
+                            else:
+                                # GRU-level param: bounds is [min, max]
+                                # Template in the first veg dict that contains it
+                                for i, veg_dict in enumerate(unit_data):
+                                    if p in veg_dict:
+                                        self.templated_parameters[group_name][unit][i][p] = \
+                                            param_name_gen(unit, p)
+                                        break
+
+                        elif isinstance(unit_data, dict):
+                            # Single-veg GRU: existing behavior
+                            if p in unit_data:
+                                self.templated_parameters[group_name][unit][p] = param_name_gen(unit, p)
+
+                    elif isinstance(self.parameters[group_name], list):
+                        if p in self.parameters[group_name][unit - 1].keys():
+                            # updating the target group entry dictionary
+                            self.templated_parameters[group_name][unit - 1][p] = param_name_gen(unit, p)
+
+                    else:
+                        raise TypeError(
+                            "The parameter bounds for each computational unit "
+                            "must be provided as a dictionary or a list."
+                        )
+        # define parameter bounds (normalized form)
+        self.parameter_bounds = normalized_bounds
+
+        return
+
+    def _walk_bounds(self, group_name, unit, name, bnd, class_name=None):
+        lo, hi, scale = parse_param_bounds(bnd)
+        if scale != 'none' and name in self._FORBIDDEN_LOG:
+            raise ValueError(
+                f"Parameter {name!r} (group {group_name!r}, unit {unit}) "
+                f"participates in the clay/sand/silt ratio constraint "
+                f"and cannot use scale {scale!r}; use 'none'."
+            )
+        self._check_param_exists(group_name, unit, name, class_name)
+
+    def _check_param_exists(self, group_name, unit, name, class_name=None):
+        grp = self.parameters.get(group_name)
+        if grp is None:
+            raise ValueError(
+                f"Parameter group {group_name!r} is not present in the "
+                f"parsed model parameters; cannot apply bounds."
+            )
+        if isinstance(grp, dict):
+            unit_data = grp.get(unit)
+            if unit_data is None:
+                raise ValueError(
+                    f"Unit {unit!r} is not present in parameter group "
+                    f"{group_name!r}; cannot apply bounds for {name!r}."
+                )
+            if isinstance(unit_data, dict):
+                if name not in unit_data:
+                    raise ValueError(
+                        f"Parameter {name!r} not found in group "
+                        f"{group_name!r}, unit {unit!r}. Available "
+                        f"parameters: {sorted(unit_data.keys())}."
+                    )
+            elif isinstance(unit_data, list):
+                if class_name is not None:
+                    matching = [d for d in unit_data
+                                if d.get('class') == class_name]
+                    if not matching:
+                        available = [d.get('class') for d in unit_data]
+                        raise ValueError(
+                            f"Vegetation class {class_name!r} not found "
+                            f"in group {group_name!r}, unit {unit!r}. "
+                            f"Available classes: {available}."
+                        )
+                    if not any(name in d for d in matching):
+                        raise ValueError(
+                            f"Parameter {name!r} not found in group "
+                            f"{group_name!r}, unit {unit!r}, class "
+                            f"{class_name!r}."
+                        )
+                else:
+                    if not any(name in d for d in unit_data):
+                        raise ValueError(
+                            f"Parameter {name!r} not found in any "
+                            f"vegetation entry of group {group_name!r}, "
+                            f"unit {unit!r}."
+                        )
+        elif isinstance(grp, list):
+            if not isinstance(unit, int) or unit < 1 or unit > len(grp):
+                raise ValueError(
+                    f"Unit {unit!r} out of range for list-form group "
+                    f"{group_name!r} (expected 1..{len(grp)})."
+                )
+            unit_data = grp[unit - 1]
+            if name not in unit_data:
+                raise ValueError(
+                    f"Parameter {name!r} not found in list-form group "
+                    f"{group_name!r}, unit {unit!r}. Available "
+                    f"parameters: {sorted(unit_data.keys())}."
+                )
+
+    def _compute_class_lam_constraints(self) -> Dict:
+        """Classify LAMN/LAMX calibration cases and rename templated names.
+
+        Walks every ``(unit, class?)`` pair in
+        ``self.parameter_bounds['class']`` and classifies the ``lamn`` /
+        ``lamx`` calibration entries into one of four cases:
+
+        * Case 1 — neither ``lamn`` nor ``lamx`` calibrated: no-op.
+        * Case 2 — only ``lamn`` calibrated: validate
+          ``lamn.upper <= actual_lamx`` of that unit/class; on violation
+          raise :class:`ValueError`.
+        * Case 3 — only ``lamx`` calibrated: validate
+          ``lamx.lower >= actual_lamn`` of that unit/class; on violation
+          raise :class:`ValueError`.
+        * Case 4 — both calibrated: record the ``(unit, class?)`` entry
+          in the returned mapping so the OSTRICH TiedParams block is
+          emitted for it.
+
+        For every calibrated ``lamn`` / ``lamx`` entry (cases 2/3/4)
+        this method also rewrites the corresponding string inside
+        ``self.templated_parameters['class']`` in place:
+
+        * ``_<U>LAMN[suffix]`` → ``_<U>LMN[suffix]_``
+        * ``_<U>LAMX[suffix]`` → ``_<U>LMX[suffix]_``
+
+        For case-4 entries, the ``lamx`` string is instead set to
+        ``_<U>LAMX_EFF[suffix]`` so that the model-facing value in
+        ``class.json`` is produced by the 4-line TiedParams block.
+
+        Returns
+        -------
+        dict
+            Mapping ``{unit: {class_name_or_None: True}}`` containing
+            only case-4 entries. Empty dict if no unit/class is in
+            case 4.
+        """
+        class_bounds = self.parameter_bounds.get('class', {}) or {}
+        class_params = self.parameters.get('class', {}) or {}
+        class_templated = self.templated_parameters.get('class', {}) or {}
+
+        class_lam: Dict = {}
+
+        for unit, unit_bounds in class_bounds.items():
+            if not isinstance(unit_bounds, dict):
+                continue
+            unit_data = class_params.get(unit)
+            unit_templated = class_templated.get(unit)
+
+            lamn_raw = unit_bounds.get('lamn')
+            lamx_raw = unit_bounds.get('lamx')
+
+            # Build a list of (class_name_or_None, lamn_bnd, lamx_bnd,
+            #                  actual_lamn, actual_lamx, target_dict)
+            # where ``target_dict`` is the dict in templated_parameters
+            # that holds the ``lamn`` / ``lamx`` keys we may rewrite.
+            entries = []
+
+            if isinstance(unit_data, dict):
+                # Single-veg GRU
+                cls = unit_data.get('class', 'default')
+                entries.append((
+                    cls,
+                    lamn_raw if isinstance(lamn_raw, list) else None,
+                    lamx_raw if isinstance(lamx_raw, list) else None,
+                    unit_data.get('lamn'),
+                    unit_data.get('lamx'),
+                    unit_templated if isinstance(unit_templated, dict) else None,
+                ))
+            elif isinstance(unit_data, list):
+                # Mixed-veg GRU: per-class resolution
+                for i, veg_dict in enumerate(unit_data):
+                    cls = veg_dict.get('class')
+                    lamn_bnd = None
+                    lamx_bnd = None
+                    if isinstance(lamn_raw, dict):
+                        lamn_bnd = lamn_raw.get(cls)
+                    if isinstance(lamx_raw, dict):
+                        lamx_bnd = lamx_raw.get(cls)
+                    target = None
+                    if (isinstance(unit_templated, list)
+                            and i < len(unit_templated)
+                            and isinstance(unit_templated[i], dict)):
+                        target = unit_templated[i]
+                    entries.append((
+                        cls,
+                        lamn_bnd,
+                        lamx_bnd,
+                        veg_dict.get('lamn'),
+                        veg_dict.get('lamx'),
+                        target,
+                    ))
+            else:
+                continue
+
+            for cls, lamn_bnd, lamx_bnd, actual_lamn, actual_lamx, target in entries:
+                has_lamn = isinstance(lamn_bnd, (list, tuple)) and len(lamn_bnd) >= 2
+                has_lamx = isinstance(lamx_bnd, (list, tuple)) and len(lamx_bnd) >= 2
+
+                # Case 1: neither calibrated — nothing to do.
+                if not has_lamn and not has_lamx:
+                    continue
+
+                # Case 2: only lamn — validate upper bound vs actual lamx.
+                if has_lamn and not has_lamx:
+                    if isinstance(actual_lamx, (int, float)) and lamn_bnd[1] > actual_lamx:
+                        raise ValueError(
+                            f"Invalid `lamn` calibration range for GRU "
+                            f"{unit!r}"
+                            + (f" (class {cls!r})" if cls is not None else "")
+                            + f": upper bound {lamn_bnd[1]} exceeds the "
+                            f"actual LAMX value {actual_lamx}. Reduce the "
+                            f"`lamn` upper bound so that lamn <= lamx is "
+                            f"guaranteed during sampling."
+                        )
+
+                # Case 3: only lamx — validate lower bound vs actual lamn.
+                if has_lamx and not has_lamn:
+                    if isinstance(actual_lamn, (int, float)) and lamx_bnd[0] < actual_lamn:
+                        raise ValueError(
+                            f"Invalid `lamx` calibration range for GRU "
+                            f"{unit!r}"
+                            + (f" (class {cls!r})" if cls is not None else "")
+                            + f": lower bound {lamx_bnd[0]} is below the "
+                            f"actual LAMN value {actual_lamn}. Raise the "
+                            f"`lamx` lower bound so that lamn <= lamx is "
+                            f"guaranteed during sampling."
+                        )
+
+                # Rename the templated proxy names for any calibrated
+                # lamn/lamx entry (cases 2, 3, 4).
+                if target is not None:
+                    if has_lamn and isinstance(target.get('lamn'), str):
+                        target['lamn'] = _rename_proxy(target['lamn'])
+                    if has_lamx and isinstance(target.get('lamx'), str):
+                        target['lamx'] = _rename_proxy(target['lamx'])
+
+                # Case 4: both calibrated — record + override lamx with EFF.
+                if has_lamn and has_lamx:
+                    # if there is an overlap, then proceed with renaming
+                    # and recording; otherwise, proceed as normal
+                    if lamn_bnd[1] > lamx_bnd[0]:
+                        class_lam.setdefault(unit, {})[cls] = True
+                        if target is not None and isinstance(target.get('lamx'), str):
+                            # target['lamx'] is already the renamed
+                            # ``_<U>LMX[suffix]_``; swap it for the EFF name
+                            # derived from the ORIGINAL param_name_gen form.
+                            # Reconstruct the suffix from the renamed string
+                            # by stripping the leading ``_<unit>LMX`` and the
+                            # trailing ``_``: what's left is the suffix
+                            # (possibly empty for single-veg).
+                            renamed = target['lamx']
+                            prefix = '_' + str(unit) + 'LMX'
+                            assert renamed.startswith(prefix) and renamed.endswith('_')
+                            suffix = renamed[len(prefix):-1]
+                            target['lamx'] = '_' + str(unit) + 'LAMX_EFF' + suffix
+
+        return class_lam
+
     def _copy_minimum_files(self, dest_path: str) -> None:
         """Copy the minimum required files to a destination path.
 
@@ -650,534 +1189,3 @@ class MESH(ModelBuilder):
 
 
         return routing_dict, hydrology_dict
-
-    def analyze(self, cache: PathLike = None) -> None:
-        """Analyze configuration and populate model parameters and outputs.
-
-        Parameters
-        ----------
-        cache : PathLike, optional
-            Optional cache directory for analysis artifacts (currently unused).
-        """
-        # perform sanity checks
-        self.sanity_check()
-
-        # given that sanity checks are passed, we can define the output
-        # files
-        for f in self.fluxes:
-            # FIXME: only netcdf files are currenlty support with MESH
-            output_file = f"{f.upper()}_{self.forcing_freq.upper()}_GRD.nc"
-            self.outputs.append(output_file)
-
-        # analyze the CLASS file and build the parameter dictionaries
-        # for MESH's specific parameter analysis functions, the `case_entry`
-        # and `info_entry` dictionaries are also returned, but not used in
-        # calibration process
-        case_entry, info_entry, class_dict = self._analyze_mesh_class()
-
-        # analyze hydrology and routing files and build the parameter dictionaries
-        routing_dict, hydrology_dict = self._analyze_mesh_hydrology()
-
-        # model's raw parameters dictionary
-        # the keys are hard-coded and documented in the model-specific
-        # MESH builder documentation
-        self.parameters = {
-            'class': class_dict,
-            'hydrology': hydrology_dict,
-            'routing': routing_dict,
-        }
-
-        self.others = {
-            'case_entry': {
-                'type': 'json',
-                'data': case_entry,
-            },
-            'info_entry': {
-                'type': 'json',
-                'data': info_entry,
-            },
-            'parameters_ds': {
-                'type': 'nc',
-                'data': parse_parameters_nc(
-                    os.path.join(self.config['instance_path'], 'MESH_parameters.nc')),
-            },
-        }
-
-        # add the step logger entry
-        self.step_logger['analyze'] = True
-
-        return
-
-    @property
-    def computational_units(self) -> Dict[str, int]:
-        """Counts of computational units per parameter group.
-
-        Returns
-        -------
-        dict[str, int]
-            Counts for each parameter group present after analysis.
-        """
-        if self.step_logger['analyze']:
-            return {
-                'class_dict': len(self.parameters['class_dict']),
-                'hydrology_dict': len(self.parameters['hydrology_dict']),
-                'routing_dict': len(self.parameters['routing_dict']),
-            }
-        else:
-            raise RuntimeError(
-                "The `analyze` method must be called before accessing "
-                "the `computational_units` property."
-            )
-
-        return
-
-    @property
-    def parameter_constraints(self):
-        """Hard-coded and user-extendable parameter constraints.
-
-        The mathematical representations are documented in the MESH builder
-        guide. A setter is provided to allow users to supply additional
-        constraints.
-
-        Returns
-        -------
-        dict
-            Current constraints mapping by parameter group.
-        """
-        # define a list of parameters that need to be included in contraints
-        # these are MESH-specific --- hard-coded values
-        if isinstance(self._parameter_constraints, dict) and len(self._parameter_constraints) == 0:
-            constraints_params_template = ['clay', 'sand']
-            # and building invidiual parameters present in all MESH configurations
-            constraint_params = []
-
-            # default is assuming MESH has 3 soil layers -- hard-coded
-            # FIXME: the 3 layer assumption should be revisited in future releases
-            #        both in FIAT-specific MESH builder and MESHFlow package.
-            for i in range(1, 4):
-                # iterate over the parameter template values
-                for p in constraints_params_template:
-                    # create the parameter name: e.g., sand1, clay2, etc.
-                    param_name = f"{p.lower()}{i}"
-                    # append to the list
-                    constraint_params.append(param_name)
-
-            # calibration constraints for each class computation unit
-            # FIXME: kind of hard-coded assumption that the `class` parameters
-            #        are the only ones that need constraints. This should be
-            #        revisited in future releases.
-            calibration_constraints = {}
-
-            for unit in self.parameter_bounds['class'].keys():
-                # creating a set of parameters for the computational
-                # unit to be calibrated
-                calibrated_set = set(self.parameter_bounds['class'][unit].keys())
-
-                # check whether any of `constrain_params` elements are available
-                # in each computational unit's set of parameters
-                match = [x for _, x in enumerate(constraint_params) if x in calibrated_set]
-
-                # set it aside if match is found
-                if match is not None:
-                    calibration_constraints[unit] = match
-
-            if self.step_logger['analyze']:
-                # hard-coded parameter constraints for MESH model parameters
-                # the keys are hard-coded and documented in the model-specific
-                # MESH builder documentation
-                self._parameter_constraints = {
-                    'class': calibration_constraints,
-                }
-
-                # LAMN/LAMX ordered-pair handling:
-                #   * Rename the templated names of every calibrated lamn/lamx
-                #     entry to the ``_<U>LMN[suffix]_`` / ``_<U>LMX[suffix]_``
-                #     convention (trailing underscore, mirroring the CLAY/SAND
-                #     disambiguation trick). For case-4 ``lamx`` the stored name
-                #     is instead overridden to ``_<U>LAMX_EFF[suffix]`` so that
-                #     the model-facing value in ``class.json`` comes from the
-                #     TiedParams block emitted in the Ostrich input.
-                #   * Validate case-2 and case-3 bound-vs-actual relationships
-                #     and raise a clear ``ValueError`` on violation.
-                #   * Record only case-4 entries under the new
-                #     ``'class_lam'`` key so the Jinja template knows which
-                #     (unit, class) pairs need the 4-line TiedParams block.
-                class_lam_constraints = self._compute_class_lam_constraints()
-                if class_lam_constraints:
-                    self._parameter_constraints['class_lam'] = class_lam_constraints
-
-        return getattr(self, '_parameter_constraints')
-    @parameter_constraints.setter
-    def parameter_constraints(self, value: List[str]) -> None:
-        """Set the parameter constraints mapping.
-
-        Parameters
-        ----------
-        value : dict
-            Constraints organized by parameter group and unit.
-        """
-        if not isinstance(value, dict):
-            raise TypeError('`parameter_constraints` must be a dictionary')
-        self._parameter_constraints = value
-
-        return
-
-    def _compute_class_lam_constraints(self) -> Dict:
-        """Classify LAMN/LAMX calibration cases and rename templated names.
-
-        Walks every ``(unit, class?)`` pair in
-        ``self.parameter_bounds['class']`` and classifies the ``lamn`` /
-        ``lamx`` calibration entries into one of four cases:
-
-        * Case 1 — neither ``lamn`` nor ``lamx`` calibrated: no-op.
-        * Case 2 — only ``lamn`` calibrated: validate
-          ``lamn.upper <= actual_lamx`` of that unit/class; on violation
-          raise :class:`ValueError`.
-        * Case 3 — only ``lamx`` calibrated: validate
-          ``lamx.lower >= actual_lamn`` of that unit/class; on violation
-          raise :class:`ValueError`.
-        * Case 4 — both calibrated: record the ``(unit, class?)`` entry
-          in the returned mapping so the OSTRICH TiedParams block is
-          emitted for it.
-
-        For every calibrated ``lamn`` / ``lamx`` entry (cases 2/3/4)
-        this method also rewrites the corresponding string inside
-        ``self.templated_parameters['class']`` in place:
-
-        * ``_<U>LAMN[suffix]`` → ``_<U>LMN[suffix]_``
-        * ``_<U>LAMX[suffix]`` → ``_<U>LMX[suffix]_``
-
-        For case-4 entries, the ``lamx`` string is instead set to
-        ``_<U>LAMX_EFF[suffix]`` so that the model-facing value in
-        ``class.json`` is produced by the 4-line TiedParams block.
-
-        Returns
-        -------
-        dict
-            Mapping ``{unit: {class_name_or_None: True}}`` containing
-            only case-4 entries. Empty dict if no unit/class is in
-            case 4.
-        """
-        def _rename_proxy(name: str) -> str:
-            return name.replace('LAMN', 'LMN').replace('LAMX', 'LMX') + '_'
-
-        def _rename_eff(name: str) -> str:
-            return name.replace('LAMX', 'LAMX_EFF')
-
-        class_bounds = self.parameter_bounds.get('class', {}) or {}
-        class_params = self.parameters.get('class', {}) or {}
-        class_templated = self.templated_parameters.get('class', {}) or {}
-
-        class_lam: Dict = {}
-
-        for unit, unit_bounds in class_bounds.items():
-            if not isinstance(unit_bounds, dict):
-                continue
-            unit_data = class_params.get(unit)
-            unit_templated = class_templated.get(unit)
-
-            lamn_raw = unit_bounds.get('lamn')
-            lamx_raw = unit_bounds.get('lamx')
-
-            # Build a list of (class_name_or_None, lamn_bnd, lamx_bnd,
-            #                  actual_lamn, actual_lamx, target_dict)
-            # where ``target_dict`` is the dict in templated_parameters
-            # that holds the ``lamn`` / ``lamx`` keys we may rewrite.
-            entries = []
-
-            if isinstance(unit_data, dict):
-                # Single-veg GRU
-                entries.append((
-                    None,
-                    lamn_raw if isinstance(lamn_raw, list) else None,
-                    lamx_raw if isinstance(lamx_raw, list) else None,
-                    unit_data.get('lamn'),
-                    unit_data.get('lamx'),
-                    unit_templated if isinstance(unit_templated, dict) else None,
-                ))
-            elif isinstance(unit_data, list):
-                # Mixed-veg GRU: per-class resolution
-                for i, veg_dict in enumerate(unit_data):
-                    cls = veg_dict.get('class')
-                    lamn_bnd = None
-                    lamx_bnd = None
-                    if isinstance(lamn_raw, dict):
-                        lamn_bnd = lamn_raw.get(cls)
-                    if isinstance(lamx_raw, dict):
-                        lamx_bnd = lamx_raw.get(cls)
-                    target = None
-                    if (isinstance(unit_templated, list)
-                            and i < len(unit_templated)
-                            and isinstance(unit_templated[i], dict)):
-                        target = unit_templated[i]
-                    entries.append((
-                        cls,
-                        lamn_bnd,
-                        lamx_bnd,
-                        veg_dict.get('lamn'),
-                        veg_dict.get('lamx'),
-                        target,
-                    ))
-            else:
-                continue
-
-            for cls, lamn_bnd, lamx_bnd, actual_lamn, actual_lamx, target in entries:
-                has_lamn = isinstance(lamn_bnd, (list, tuple)) and len(lamn_bnd) >= 2
-                has_lamx = isinstance(lamx_bnd, (list, tuple)) and len(lamx_bnd) >= 2
-
-                # Case 1: neither calibrated — nothing to do.
-                if not has_lamn and not has_lamx:
-                    continue
-
-                # Case 2: only lamn — validate upper bound vs actual lamx.
-                if has_lamn and not has_lamx:
-                    if isinstance(actual_lamx, (int, float)) and lamn_bnd[1] > actual_lamx:
-                        raise ValueError(
-                            f"Invalid `lamn` calibration range for GRU "
-                            f"{unit!r}"
-                            + (f" (class {cls!r})" if cls is not None else "")
-                            + f": upper bound {lamn_bnd[1]} exceeds the "
-                            f"actual LAMX value {actual_lamx}. Reduce the "
-                            f"`lamn` upper bound so that lamn <= lamx is "
-                            f"guaranteed during sampling."
-                        )
-
-                # Case 3: only lamx — validate lower bound vs actual lamn.
-                if has_lamx and not has_lamn:
-                    if isinstance(actual_lamn, (int, float)) and lamx_bnd[0] < actual_lamn:
-                        raise ValueError(
-                            f"Invalid `lamx` calibration range for GRU "
-                            f"{unit!r}"
-                            + (f" (class {cls!r})" if cls is not None else "")
-                            + f": lower bound {lamx_bnd[0]} is below the "
-                            f"actual LAMN value {actual_lamn}. Raise the "
-                            f"`lamx` lower bound so that lamn <= lamx is "
-                            f"guaranteed during sampling."
-                        )
-
-                # Rename the templated proxy names for any calibrated
-                # lamn/lamx entry (cases 2, 3, 4).
-                if target is not None:
-                    if has_lamn and isinstance(target.get('lamn'), str):
-                        target['lamn'] = _rename_proxy(target['lamn'])
-                    if has_lamx and isinstance(target.get('lamx'), str):
-                        target['lamx'] = _rename_proxy(target['lamx'])
-
-                # Case 4: both calibrated — record + override lamx with EFF.
-                if has_lamn and has_lamx:
-                    class_lam.setdefault(unit, {})[cls] = True
-                    if target is not None and isinstance(target.get('lamx'), str):
-                        # target['lamx'] is already the renamed
-                        # ``_<U>LMX[suffix]_``; swap it for the EFF name
-                        # derived from the ORIGINAL param_name_gen form.
-                        # Reconstruct the suffix from the renamed string
-                        # by stripping the leading ``_<unit>LMX`` and the
-                        # trailing ``_``: what's left is the suffix
-                        # (possibly empty for single-veg).
-                        renamed = target['lamx']
-                        prefix = '_' + str(unit) + 'LMX'
-                        assert renamed.startswith(prefix) and renamed.endswith('_')
-                        suffix = renamed[len(prefix):-1]
-                        target['lamx'] = '_' + str(unit) + 'LAMX_EFF' + suffix
-
-        return class_lam
-
-    def prepare(self) -> None:
-        """Prepare templated parameters, bounds, and constraints for calibration.
-
-        Ensures analysis is complete, constructs ``templated_parameters`` by
-        substituting calibratable names, and assigns bounds from configuration.
-        """
-        # check whether the instance has been analyzed
-        if not self.step_logger['analyze']:
-            self.analyze()
-
-        # given the parameter bounds in self.config['parameter_bounds'],
-        # the necessary parameter dictionaries are templated and saved
-
-        # --- normalize list-of-dicts bounds for mixed-veg GRUs ----------
-        # Users may supply a list of dicts (each with a 'class' key) for
-        # mixed-veg GRUs.  Normalize them into a single dict where veg
-        # params map to {class_name: [min, max]} and GRU-level params map
-        # to [min, max] (widest range across all dicts).
-        normalized_bounds = copy.deepcopy(self.config['parameter_bounds'])
-
-        # Validate every bounds entry once up front so errors are reported
-        # before any templating work. This walker enforces three properties:
-        #   1) the bounds entry itself is well-formed (delegated to
-        #      ``parse_param_bounds``);
-        #   2) logarithmic sampling is not requested for clay/sand soil
-        #      parameters, which are tied via ``BeginTiedParams`` ratio
-        #      constraints and must remain linear;
-        #   3) each ``(group, unit, name)`` key resolves to a real parameter
-        #      in ``self.parameters`` — this prevents a downstream Jinja2
-        #      ``'NoneType' is not iterable`` crash when the user references
-        #      a parameter that does not exist in the parsed model inputs.
-        for _gname, _gdict in normalized_bounds.items():
-            if not isinstance(_gdict, dict):
-                continue
-            for _unit, _unit_bounds in _gdict.items():
-                if isinstance(_unit_bounds, list):
-                    # Mixed-veg form: list of per-class dicts
-                    for _veg_dict in _unit_bounds:
-                        _cls = _veg_dict.get('class')
-                        for _p, _bnd in _veg_dict.items():
-                            if _p == 'class':
-                                continue
-                            self._walk_bounds(_gname, _unit, _p, _bnd,
-                                         class_name=_cls)
-                elif isinstance(_unit_bounds, dict):
-                    for _p, _bnd in _unit_bounds.items():
-                        if isinstance(_bnd, dict):
-                            # per-class dict: {class_name: [min,max[,scale]]}
-                            for _cls, _cbnd in _bnd.items():
-                                self._walk_bounds(_gname, _unit, _p, _cbnd,
-                                             class_name=_cls)
-                        else:
-                            self._walk_bounds(_gname, _unit, _p, _bnd)
-
-        if 'class' in normalized_bounds:
-            for unit, unit_bounds in normalized_bounds['class'].items():
-                unit_data = self.parameters['class'][unit]
-                if isinstance(unit_bounds, list) and not isinstance(unit_data, list):
-                    raise ValueError(
-                        f"GRU {unit} (class '{unit_data['class']}') is a "
-                        f"single-vegetation GRU, but a list of mixed-vegetation "
-                        f"bounds was provided. Use a single dictionary instead."
-                    )
-                if isinstance(unit_bounds, dict) and isinstance(unit_data, list):
-                    veg_classes = [v['class'] for v in unit_data]
-                    raise ValueError(
-                        f"GRU {unit} is a mixed-vegetation GRU with classes "
-                        f"{veg_classes}, but a single dictionary of bounds was "
-                        f"provided. Use a list of dictionaries (one per "
-                        f"vegetation class) instead."
-                    )
-                if isinstance(unit_bounds, list):
-                    normalized_bounds['class'][unit] = \
-                        normalize_mixed_veg_bounds(unit_bounds)
-
-        # initialize the `templated_parameters` dictionary
-        self.templated_parameters = self.parameters.copy()
-
-        # define parameter names that will be involved
-        # in the calibration process
-        for group_name, group in normalized_bounds.items():
-            # building the templated_parameters dictionary
-            # for each parameter group in the `parameters` dictionary
-            for unit in group.keys():
-                # iterate over the computational units
-                # update the values of parameters in each unit
-                unit_params = group[unit]
-                # input can be either a dictionary or a list
-                for p, bounds in unit_params.items():
-                    if isinstance(self.parameters[group_name], dict):
-                        unit_data = self.parameters[group_name][unit]
-
-                        if isinstance(unit_data, list):
-                            # Mixed-veg GRU: unit_data is a list of veg dicts
-                            if isinstance(bounds, dict):
-                                # Veg-specific param: bounds is {class_name: [min, max]}
-                                for i, veg_dict in enumerate(unit_data):
-                                    class_type = veg_dict['class']
-                                    if class_type in bounds and p in veg_dict:
-                                        self.templated_parameters[group_name][unit][i][p] = \
-                                            param_name_gen(unit, f"{p}_{class_type}")
-                            else:
-                                # GRU-level param: bounds is [min, max]
-                                # Template in the first veg dict that contains it
-                                for i, veg_dict in enumerate(unit_data):
-                                    if p in veg_dict:
-                                        self.templated_parameters[group_name][unit][i][p] = \
-                                            param_name_gen(unit, p)
-                                        break
-
-                        elif isinstance(unit_data, dict):
-                            # Single-veg GRU: existing behavior
-                            if p in unit_data:
-                                self.templated_parameters[group_name][unit][p] = param_name_gen(unit, p)
-
-                    elif isinstance(self.parameters[group_name], list):
-                        if p in self.parameters[group_name][unit - 1].keys():
-                            # updating the target group entry dictionary
-                            self.templated_parameters[group_name][unit - 1][p] = param_name_gen(unit, p)
-
-                    else:
-                        raise TypeError(
-                            "The parameter bounds for each computational unit "
-                            "must be provided as a dictionary or a list."
-                        )
-        # define parameter bounds (normalized form)
-        self.parameter_bounds = normalized_bounds
-
-        return
-
-    def _walk_bounds(self, group_name, unit, name, bnd, class_name=None):
-        lo, hi, scale = parse_param_bounds(bnd)
-        if scale != 'none' and name in self._FORBIDDEN_LOG:
-            raise ValueError(
-                f"Parameter {name!r} (group {group_name!r}, unit {unit}) "
-                f"participates in the clay/sand/silt ratio constraint "
-                f"and cannot use scale {scale!r}; use 'none'."
-            )
-        self._check_param_exists(group_name, unit, name, class_name)
-
-    def _check_param_exists(self, group_name, unit, name, class_name=None):
-        grp = self.parameters.get(group_name)
-        if grp is None:
-            raise ValueError(
-                f"Parameter group {group_name!r} is not present in the "
-                f"parsed model parameters; cannot apply bounds."
-            )
-        if isinstance(grp, dict):
-            unit_data = grp.get(unit)
-            if unit_data is None:
-                raise ValueError(
-                    f"Unit {unit!r} is not present in parameter group "
-                    f"{group_name!r}; cannot apply bounds for {name!r}."
-                )
-            if isinstance(unit_data, dict):
-                if name not in unit_data:
-                    raise ValueError(
-                        f"Parameter {name!r} not found in group "
-                        f"{group_name!r}, unit {unit!r}. Available "
-                        f"parameters: {sorted(unit_data.keys())}."
-                    )
-            elif isinstance(unit_data, list):
-                if class_name is not None:
-                    matching = [d for d in unit_data
-                                if d.get('class') == class_name]
-                    if not matching:
-                        available = [d.get('class') for d in unit_data]
-                        raise ValueError(
-                            f"Vegetation class {class_name!r} not found "
-                            f"in group {group_name!r}, unit {unit!r}. "
-                            f"Available classes: {available}."
-                        )
-                    if not any(name in d for d in matching):
-                        raise ValueError(
-                            f"Parameter {name!r} not found in group "
-                            f"{group_name!r}, unit {unit!r}, class "
-                            f"{class_name!r}."
-                        )
-                else:
-                    if not any(name in d for d in unit_data):
-                        raise ValueError(
-                            f"Parameter {name!r} not found in any "
-                            f"vegetation entry of group {group_name!r}, "
-                            f"unit {unit!r}."
-                        )
-        elif isinstance(grp, list):
-            if not isinstance(unit, int) or unit < 1 or unit > len(grp):
-                raise ValueError(
-                    f"Unit {unit!r} out of range for list-form group "
-                    f"{group_name!r} (expected 1..{len(grp)})."
-                )
-            unit_data = grp[unit - 1]
-            if name not in unit_data:
-                raise ValueError(
-                    f"Parameter {name!r} not found in list-form group "
-                    f"{group_name!r}, unit {unit!r}. Available "
-                    f"parameters: {sorted(unit_data.keys())}."
-                )
-

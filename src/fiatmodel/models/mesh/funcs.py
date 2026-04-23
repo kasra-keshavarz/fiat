@@ -98,7 +98,6 @@ def parse_param_bounds(bnd):
         )
     return lo, hi, scale
 
-
 def normalize_mixed_veg_bounds(bounds_list):
     """Normalize a list-of-dicts parameter bounds for a mixed-veg GRU.
 
@@ -155,7 +154,6 @@ def normalize_mixed_veg_bounds(bounds_list):
                     existing[1] = max(existing[1], hi)
 
     return normalized
-
 
 def remove_comments(
     string
