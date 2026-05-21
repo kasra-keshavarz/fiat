@@ -145,11 +145,26 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         # combining model information with the current config and supplying
         # the template with all necessary information
         info_dict = self.config.copy()
-        # adding model 1) `parameters`, 2) `parameter_bounds`, and 
+        # adding model 1) `parameters`, 2) `parameter_bounds`, and
         # 3) `parameter_constraints`
         info_dict['parameters'] = self.model.templated_parameters
         info_dict['parameter_bounds'] = self.model.parameter_bounds
         info_dict['parameter_constraints'] = self.model.parameter_constraints
+
+        # Sanitize callable keys in objective_functions so that Jinja2
+        # renders clean names (e.g., ``pbias``) instead of ``repr(function)``.
+        if 'objective_functions' in info_dict and isinstance(
+            info_dict['objective_functions'], dict
+        ):
+            sanitized = {}
+            for group, fluxes in info_dict['objective_functions'].items():
+                sanitized[group] = {}
+                for flux, metrics in fluxes.items():
+                    sanitized[group][flux] = {
+                        (k.__name__ if callable(k) else k): v
+                        for k, v in metrics.items()
+                    }
+            info_dict['objective_functions'] = sanitized
 
         # create content
         content = self.template.render(

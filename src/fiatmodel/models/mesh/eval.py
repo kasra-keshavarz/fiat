@@ -453,7 +453,8 @@ def write_penalty_values(eval_config, penalty=1e10):
         if any(kw in group for kw in ['flux', 'custom']):
             for flux_var in group_metrics:
                 for idx, metric_name in enumerate(group_metrics[flux_var], start=1):
-                    write_of_csv(output_dir, group, flux_var, metric_name, idx, penalty)
+                    metric_key = metric_name.__name__ if callable(metric_name) else metric_name
+                    write_of_csv(output_dir, group, flux_var, metric_key, idx, penalty)
 
 def normalize_expressions(value):
     """Ensure expressions are a list; wrap a bare string into a single-element list."""
@@ -727,18 +728,19 @@ if __name__ == "__main__":
                     custom_ofs[flux_var] = {}
 
                     for metric_name in metrics:
-                        custom_ofs[flux_var][metric_name] = []
+                        metric_key = metric_name.__name__ if callable(metric_name) else metric_name
+                        custom_ofs[flux_var][metric_key] = []
 
                         helper_keys = list(helper_ofs.get(flux_var, {}).keys())
-                        custom_keys = [k for k in custom_ofs[flux_var] if k != metric_name]
+                        custom_keys = [k for k in custom_ofs[flux_var] if k != metric_key]
                         expressions = normalize_expressions(metrics[metric_name])
 
                         for idx, expr in enumerate(expressions, start=1):
                             rewritten = rewrite_expr(expr, helper_keys, flux_var, 'helper_ofs')
                             rewritten = rewrite_expr(rewritten, custom_keys, flux_var, 'custom_ofs')
                             metric_value = eval(rewritten)
-                            custom_ofs[flux_var][metric_name] = metric_value
-                            write_of_csv(output_dir, group, flux_var, metric_name, idx, metric_value)
+                            custom_ofs[flux_var][metric_key] = metric_value
+                            write_of_csv(output_dir, group, flux_var, metric_key, idx, metric_value)
 
             # standard flux-based objective functions using HydroErr
             else:
