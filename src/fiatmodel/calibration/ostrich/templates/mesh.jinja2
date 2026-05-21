@@ -224,7 +224,7 @@ BeginParams
               {% set param_name = param_name | replace('LAMX_EFF', 'LMX') ~ '_' %}
             {% endif %}
             {# so far, we were able to get the parameter name #}
-    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} {{ tx_fields(bounds) }} free
+    {{ param_name }}  {{ info.initial_values[param_group][unit][name] }}   {{ bounds[0] }}   {{ bounds[1] }} {{ tx_fields(bounds) }} free
             {% endif %}{# param_name is string #}
           {% elif unit_data is iterable %}
             {# Mixed-veg GRU: unit_data is a list of veg dicts #}
@@ -253,7 +253,7 @@ BeginParams
                     {# Case-4 lamx in a mixed-veg GRU — see single-veg note above. #}
                     {% set param_name = param_name | replace('LAMX_EFF', 'LMX') ~ '_' %}
                   {% endif %}
-    {{ param_name }}  {{ class_bounds[0] }}   {{ class_bounds[0] }}   {{ class_bounds[1] }} {{ tx_fields(class_bounds) }} free
+    {{ param_name }}  {{ info.initial_values[param_group][unit][name][class_type] }}   {{ class_bounds[0] }}   {{ class_bounds[1] }} {{ tx_fields(class_bounds) }} free
                 {% endif %}
               {% endfor %}
             {% else %}
@@ -282,7 +282,7 @@ BeginParams
                        currently always veg-specific (see _CLASS_VEG_PARAMS). #}
                     {% set param_name = param_name | replace('LAMX_EFF', 'LMX') ~ '_' %}
                   {% endif %}
-    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} {{ tx_fields(bounds) }} free
+    {{ param_name }}  {{ info.initial_values[param_group][unit][name] }}   {{ bounds[0] }}   {{ bounds[1] }} {{ tx_fields(bounds) }} free
                 {% endif %}
               {% endfor %}
             {% endif %}
@@ -300,7 +300,7 @@ BeginParams
         {% for name, bounds in param_set.items() %}
           {# Extract templated calibrating parameter name #}
           {% set param_name = parameters.get(param_group)[unit - 1].get(name) %}
-    {{ param_name }}  {{ bounds[0] }}   {{ bounds[0] }}   {{ bounds[1] }} {{ tx_fields(bounds) }} free
+    {{ param_name }}  {{ info.initial_values[param_group][unit][name] }}   {{ bounds[0] }}   {{ bounds[1] }} {{ tx_fields(bounds) }} free
         {% endfor %}
 
       {% endfor %}

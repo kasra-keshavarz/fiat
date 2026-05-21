@@ -18,6 +18,8 @@ import sys
 import shutil
 import os
 import json
+import math
+import random
 
 from typing import (
     Dict,
@@ -121,6 +123,75 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
 
         return
 
+    @staticmethod
+    def _draw_initial(bounds):
+        """Draw a single random initial value and format it.
+
+        Parameters
+        ----------
+        bounds : list or tuple
+            ``[min, max, scale]`` or ``[min, max]``.
+
+        Returns
+        -------
+        str
+            Formatted initial value.
+        """
+        min_val = float(bounds[0])
+        max_val = float(bounds[1])
+        scale = bounds[2] if len(bounds) > 2 else 'none'
+
+        if min_val == max_val:
+            val = min_val
+        elif scale in ('log10', 'ln'):
+            if scale == 'log10':
+                val = 10 ** random.uniform(math.log10(min_val), math.log10(max_val))
+            else:  # ln
+                val = math.exp(random.uniform(math.log(min_val), math.log(max_val)))
+        else:
+            val = random.uniform(min_val, max_val)
+
+        if scale in ('log10', 'ln'):
+            return f"{val:.6e}"
+        else:
+            return f"{val:.6f}"
+
+    def _generate_initial_values(self, bounds_dict, seed=None):
+        """Generate random initial values mirroring ``parameter_bounds`` structure.
+
+        Parameters
+        ----------
+        bounds_dict : dict
+            Nested dict matching ``parameter_bounds``.
+        seed : int or None
+            Optional random seed for reproducibility.
+
+        Returns
+        -------
+        dict
+            Nested dict of formatted initial-value strings.
+        """
+        if seed is not None:
+            random.seed(seed)
+
+        initial_values = {}
+        for param_group, param_dict in bounds_dict.items():
+            initial_values[param_group] = {}
+            if not param_dict or not isinstance(param_dict, dict):
+                continue
+            for unit, params in param_dict.items():
+                initial_values[param_group][unit] = {}
+                if not isinstance(params, dict):
+                    continue
+                for name, bounds in params.items():
+                    if isinstance(bounds, dict):
+                        initial_values[param_group][unit][name] = {}
+                        for class_type, class_bounds in bounds.items():
+                            initial_values[param_group][unit][name][class_type] = self._draw_initial(class_bounds)
+                    elif isinstance(bounds, (list, tuple)) and len(bounds) >= 2:
+                        initial_values[param_group][unit][name] = self._draw_initial(bounds)
+        return initial_values
+
     def generate_optimizer_templates(
         self,
         output_path: PathLike,
@@ -145,11 +216,15 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         # combining model information with the current config and supplying
         # the template with all necessary information
         info_dict = self.config.copy()
-        # adding model 1) `parameters`, 2) `parameter_bounds`, and 
+        # adding model 1) `parameters`, 2) `parameter_bounds`, and
         # 3) `parameter_constraints`
         info_dict['parameters'] = self.model.templated_parameters
         info_dict['parameter_bounds'] = self.model.parameter_bounds
         info_dict['parameter_constraints'] = self.model.parameter_constraints
+        info_dict['initial_values'] = self._generate_initial_values(
+            self.model.parameter_bounds,
+            seed=info_dict.get('random_seed'),
+        )
 
         # create content
         content = self.template.render(
