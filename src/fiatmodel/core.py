@@ -666,6 +666,7 @@ class Calibration(object):
             'model_instance_path': './model/',
             'model_executable': os.path.basename(self.model_config.get('executable')),
             'dates': self.calibration_config.get('dates'),
+            'allow_date_mismatch': self.calibration_config.get('allow_date_mismatch', False),
             'objective_functions': self.calibration_config.get('objective_functions'),
             'results_path': 'results',
             'output_files': [self.model.outputs],

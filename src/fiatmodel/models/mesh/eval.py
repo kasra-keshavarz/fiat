@@ -250,7 +250,8 @@ def infer_frequency(time_index: pd.DatetimeIndex) -> DateOffset:
 
 def build_calibration_subset(
     ds: xr.Dataset, 
-    dates: Sequence[Mapping[str, Any]]
+    dates: Sequence[Mapping[str, Any]],
+    allow_date_mismatch: bool = False
 ) -> xr.Dataset:
     """Build a union time index across configured intervals and reindex ``ds``.
 
@@ -267,6 +268,11 @@ def build_calibration_subset(
     dates : sequence of mapping
         Iterable of ``{"start": <str>, "end": <str>}`` dictionaries defining
         closed intervals. Strings are parsed with :func:`pandas.to_datetime`.
+    allow_date_mismatch : bool, default False
+        If ``True``, issue a warning instead of raising an error when the
+        requested calibration range extends beyond the dataset's time span.
+        Missing time steps are filled with ``NaN`` and HydroErr metrics will
+        compute on the overlapping valid data.
 
     Returns
     -------
@@ -310,12 +316,21 @@ def build_calibration_subset(
     orig_min, orig_max = time_index.min(), time_index.max()
     requested_min, requested_max = union_index.min(), union_index.max()
     if requested_min < orig_min or requested_max > orig_max:
-        raise KeyError(
-            "Requested calibration range beyond simulation time-series. "
-            f"Dataset time range: [{orig_min}, {orig_max}], "
-            f"requested range: [{requested_min}, {requested_max}], "
-            f"inferred freq: {freq}"
-        )
+        if allow_date_mismatch:
+            warnings.warn(
+                "Requested calibration range extends beyond dataset time span. "
+                f"Dataset time range: [{orig_min}, {orig_max}], "
+                f"requested range: [{requested_min}, {requested_max}], "
+                f"inferred freq: {freq}. "
+                "Missing values will be filled with NaN."
+            )
+        else:
+            raise KeyError(
+                "Requested calibration range beyond simulation time-series. "
+                f"Dataset time range: [{orig_min}, {orig_max}], "
+                f"requested range: [{requested_min}, {requested_max}], "
+                f"inferred freq: {freq}"
+            )
 
     # Reindex (no fill method => NaNs)
     out = ds.reindex(time=union_index)
@@ -616,8 +631,13 @@ if __name__ == "__main__":
                 )
 
         # subset to calibration dates
-        sim_sub = build_calibration_subset(simulations, eval_config.get('dates'))
-        obs_sub = build_calibration_subset(observations, eval_config.get('dates'))
+        allow_mismatch = eval_config.get('allow_date_mismatch', False)
+        sim_sub = build_calibration_subset(
+            simulations, eval_config.get('dates'), allow_date_mismatch=allow_mismatch
+        )
+        obs_sub = build_calibration_subset(
+            observations, eval_config.get('dates'), allow_date_mismatch=allow_mismatch
+        )
 
         # resample if observation and simulation time-steps differ
         obs_ts = str(np.unique(obs_sub['freq'].values)[0])

@@ -83,6 +83,12 @@ The following entries provide necessary information for the package. In brief:
 
   All observations used during calibration must cover these ranges at the
   specified sampling frequency.
+- ``allow_date_mismatch``: boolean (default ``False``). When ``True``, the
+  calibration will proceed even if the requested date range extends beyond the
+  available simulation or observation time span. Missing time steps are filled
+  with ``NaN`` and objective function metrics compute on the overlapping valid
+  data. Use this when observations become available partway through a desired
+  calibration window.
 - ``objective_functions``: mapping of observations to metrics. The outer keys
   correspond to observation ``name``s (e.g., ``"QO"`` for discharge in MESH). Each value is
   a dictionary mapping a metric name to a list of weighted observation terms.
