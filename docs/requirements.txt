@@ -16,4 +16,5 @@ python-dateutil>=2.8.2
 click>=8.2.1
 pint-pandas>=0.7.1
 timezonefinder>=6.5.9
+numexpr>=2.7.0
 
