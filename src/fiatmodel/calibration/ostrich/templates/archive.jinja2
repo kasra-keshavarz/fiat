@@ -1,44 +1,143 @@
 #!/bin/bash
+# Archive script for OSTRICH calibration best-run preservation.
+# Called by OSTRICH via PreserveModelOutput with:
+#   $1 = rank, $2 = trial, $3 = counter, $4 = objective_category
+# Only the "best" run is fully archived; all others are ignored.
 
-# necessary information
-# calibration time-stamp
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Configuration (rendered by Jinja2)
+# ---------------------------------------------------------------------------
 time_stamp="{{ timestamp }}"
+calibration_root="{{ calibration_root }}"
+model="{{ model }}"
 
-# archiving path
-archive_path="${HOME}/.logs/fiat/archive_{{ model }}_${time_stamp}"
+# ---------------------------------------------------------------------------
+# Inputs from OSTRICH
+# ---------------------------------------------------------------------------
+rank="${1:-}"
+trial="${2:-}"
+counter="${3:-}"
+objective_category="${4:-}"
 
-# if archive_path does not exist, then create it
-if [[ ! -d "${archive_path}" ]]; then
-  mkdir -p "${archive_path}"
+# ---------------------------------------------------------------------------
+# Early exit for non-best runs
+# ---------------------------------------------------------------------------
+if [[ "${objective_category}" != "best" ]]; then
+    exit 0
 fi
 
-# creating archive run directory
-best_path="${archive_path}/run_best/"
+# ---------------------------------------------------------------------------
+# Archive path (co-located with calibration root)
+# ---------------------------------------------------------------------------
+archive_path="${calibration_root}/logs/archive_${model}_${time_stamp}"
+best_path="${archive_path}/run_best"
+mkdir -p "${best_path}"
 
-# defining input variables received from OSTRICH(MPI)
-rank="$1"
-trial="$2"
-counter="$3"
-objective_category="$4"
+# ---------------------------------------------------------------------------
+# Helper: track manifest entries
+# ---------------------------------------------------------------------------
+declare json_entries=""
 
-# copy necessary information 
-# if objective_category is `best', then copy the model instance
-# to the ${best_path}
-if [[ "${objective_category}" == "best" ]]; then
-  target="${best_path}"
-else
-  target="${archive_path}/cpu_${rank}/run_${counter}/"
+add_entry() {
+    local key="$1"
+    local path="$2"
+    if [[ -e "${best_path}/${path}" ]]; then
+        if [[ -n "${json_entries}" ]]; then
+            json_entries="${json_entries},"
+        fi
+        json_entries="${json_entries}
+        \"${key}\": \"${path}\""
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 1. Complete model instance (inputs that produced the best result)
+# ---------------------------------------------------------------------------
+if [[ -d "./model" ]]; then
+    cp -rL "./model" "${best_path}/"
+    add_entry "model_instance" "model"
 fi
 
-# make the target directory in case it does not exist
-mkdir -p "$target"
+# ---------------------------------------------------------------------------
+# 2. Ostrich metadata — rank-aware priority copy into ostrich_metadata/
+#    Priority: calibration root consolidated file first, then trial-specific.
+#    Guarantees at most one file per type (no clutter).
+# ---------------------------------------------------------------------------
+mkdir -p "${best_path}/ostrich_metadata"
 
-# echo log message
-echo "rank,counter,objective_category" > "${target}/log_${time_stamp}.csv"
-echo "${rank},${counter},${objective_category}" >> "${target}/log_${time_stamp}.csv"
+for prefix in OstModel OstOutput OstErrors; do
+    src=""
+    if [[ -f "${calibration_root}/${prefix}0.txt" ]]; then
+        src="${calibration_root}/${prefix}0.txt"
+    elif [[ -f "./${prefix}${rank}.txt" ]]; then
+        src="./${prefix}${rank}.txt"
+    fi
 
-# make a copy of the *.ini files
-cp ./model/*.ini "${target}"
+    if [[ -n "${src}" ]]; then
+        cp "${src}" "${best_path}/ostrich_metadata/"
+    fi
+done
 
-# make a copy of the *.txt files
-cp ./model/*.txt "${target}"
+add_entry "ostrich_parameters" "ostrich_metadata"
+
+# ---------------------------------------------------------------------------
+# 3. Templated parameter JSONs from etc/eval/ (substituted parameters)
+# ---------------------------------------------------------------------------
+if [[ -d "./etc/eval" ]]; then
+    mkdir -p "${best_path}/etc_eval"
+    cp ./etc/eval/*.json "${best_path}/etc_eval/" 2>/dev/null || true
+    cp ./etc/eval/*.py   "${best_path}/etc_eval/" 2>/dev/null || true
+    add_entry "evaluated_parameters" "etc_eval"
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Source templates from calibration root etc/templates/
+# ---------------------------------------------------------------------------
+if [[ -d "${calibration_root}/etc/templates" ]]; then
+    mkdir -p "${best_path}/etc_templates"
+    cp "${calibration_root}"/etc/templates/*.json "${best_path}/etc_templates/" 2>/dev/null || true
+    cp "${calibration_root}"/etc/templates/*.nc   "${best_path}/etc_templates/" 2>/dev/null || true
+    add_entry "source_templates" "etc_templates"
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Model execution log
+# ---------------------------------------------------------------------------
+if [[ -f "./model_run.log" ]]; then
+    cp "./model_run.log" "${best_path}/"
+    add_entry "execution_log" "model_run.log"
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Reference configuration files from calibration root
+# ---------------------------------------------------------------------------
+for ref_file in ostIn.txt fiat_instance.json; do
+    if [[ -f "${calibration_root}/${ref_file}" ]]; then
+        cp "${calibration_root}/${ref_file}" "${best_path}/"
+    fi
+done
+
+add_entry "optimizer_config" "ostIn.txt"
+# fiat_instance.json is only generated when summarize=True; skip silently if absent
+if [[ -f "${best_path}/fiat_instance.json" ]]; then
+    add_entry "instance_summary" "fiat_instance.json"
+fi
+
+# ---------------------------------------------------------------------------
+# 7. Write manifest
+# ---------------------------------------------------------------------------
+cat > "${best_path}/run_info.json" <<EOF
+{
+    "rank": "${rank}",
+    "trial": "${trial}",
+    "counter": "${counter}",
+    "objective_category": "${objective_category}",
+    "timestamp": "${time_stamp}",
+    "calibration_root": "${calibration_root}",
+    "archive_path": "${archive_path}",
+    "contents": {${json_entries}
+    }
+}
+EOF

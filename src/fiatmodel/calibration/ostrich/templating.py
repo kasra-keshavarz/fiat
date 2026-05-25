@@ -347,6 +347,7 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         archive_content = self.archive_template.render(
             model=self.model.model_software.lower(),
             timestamp=datetime.now().strftime('%Y-%m-%dT%H.%M.%S'),
+            calibration_root=os.path.abspath(output_path),
         )
         with open(archive_script_path, 'w') as f:
             f.write(archive_content)
