@@ -109,6 +109,26 @@ BeginResponseVars
       {% endfor %}
     {% endfor %}
   {% endfor %}
+  {# Constraint response variables #}
+  {% set constraints = info.get('constraints') %}
+  {% if constraints is defined and constraints is mapping %}
+    {% for group in constraints.keys() if 'helper' not in group %}
+      {% for flux in constraints.get(group).keys() %}
+        {% for metric in constraints.get(group).get(flux).keys() %}
+          {% set metric_info = constraints.get(group).get(flux).get(metric) %}
+          {% set expressions = metric_info.get('expressions') %}
+          {% if expressions is string %}
+  constraint_{{ group }}_{{ flux }}_{{ metric }}_1     ./etc/eval/constraint_{{ group }}_{{ flux }}_{{ metric }}_1.csv ;             OST_NULL     0      1     ','
+          {% else %}
+            {% for expr in expressions %}
+              {% set idx = loop.index %}
+  constraint_{{ group }}_{{ flux }}_{{ metric }}_{{ idx }}     ./etc/eval/constraint_{{ group }}_{{ flux }}_{{ metric }}_{{ idx }}.csv ;             OST_NULL     0      1     ','
+            {% endfor %}
+          {% endif %}
+        {% endfor %}
+      {% endfor %}
+    {% endfor %}
+  {% endif %}
 EndResponseVars
 
 # Objective function specs
@@ -133,6 +153,30 @@ BeginGCOP
 EndGCOP
 {% endif %}
 
+{# Constraints block #}
+{% set constraints = info.get('constraints') %}
+{% if constraints is defined and constraints is mapping %}
+BeginConstraints
+# name                                          type     CF          lower        upper        resp.var
+  {% for group in constraints.keys() if 'helper' not in group %}
+    {% for flux in constraints.get(group).keys() %}
+      {% for metric in constraints.get(group).get(flux).keys() %}
+        {% set metric_info = constraints.get(group).get(flux).get(metric) %}
+        {% set expressions = metric_info.get('expressions') %}
+        {% if expressions is string %}
+  constraint_{{ group }}_{{ flux }}_{{ metric }}_1  general  {{ metric_info.get('cost_factor') }}  {{ metric_info.get('lower') }}  {{ metric_info.get('upper') }}  constraint_{{ group }}_{{ flux }}_{{ metric }}_1
+        {% else %}
+          {% for expr in expressions %}
+            {% set idx = loop.index %}
+  constraint_{{ group }}_{{ flux }}_{{ metric }}_{{ idx }}  general  {{ metric_info.get('cost_factor') }}  {{ metric_info.get('lower') }}  {{ metric_info.get('upper') }}  constraint_{{ group }}_{{ flux }}_{{ metric }}_{{ idx }}
+          {% endfor %}
+        {% endif %}
+      {% endfor %}
+    {% endfor %}
+  {% endfor %}
+EndConstraints
+{% endif %}
+
 {% if objective_functions is defined and objective_functions is mapping %}
 # Calculation methods for cost/objective functions
 # CalculationMethod
@@ -153,6 +197,30 @@ EndGCOP
     {% endfor %}
   {% endfor %}
 # EndCalculationMethod
+{% endif %}
+
+{# Constraint calculation method comments #}
+{% set constraints = info.get('constraints') %}
+{% if constraints is defined and constraints is mapping %}
+# Calculation methods for constraints
+# ConstraintCalculationMethod
+  {% for group in constraints.keys() %}
+    {% for flux in constraints.get(group).keys() %}
+      {% for metric in constraints.get(group).get(flux).keys() %}
+        {% set metric_info = constraints.get(group).get(flux).get(metric) %}
+        {% set expressions = metric_info.get('expressions') %}
+        {% if expressions is string %}
+  # constraint_{{ group }}_{{ flux }}_{{ metric }}_1: {{ expressions }} [lower={{ metric_info.get('lower') }}, upper={{ metric_info.get('upper') }}, CF={{ metric_info.get('cost_factor') }}]
+        {% else %}
+          {% for expr in expressions %}
+            {% set idx = loop.index %}
+  # constraint_{{ group }}_{{ flux }}_{{ metric }}_{{ idx }}: {{ expr }} [lower={{ metric_info.get('lower') }}, upper={{ metric_info.get('upper') }}, CF={{ metric_info.get('cost_factor') }}]
+          {% endfor %}
+        {% endif %}
+      {% endfor %}
+    {% endfor %}
+  {% endfor %}
+# EndConstraintCalculationMethod
 {% endif %}
 
 {% if parameters is iterable and parameters %}

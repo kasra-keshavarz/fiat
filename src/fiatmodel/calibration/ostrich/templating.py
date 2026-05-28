@@ -240,6 +240,20 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
                         for k, v in metrics.items()
                     }
             info_dict['objective_functions'] = sanitized
+        
+        # Sanitize callable keys in constraints (same pattern as objective_functions)
+        if 'constraints' in info_dict and isinstance(
+            info_dict['constraints'], dict
+        ):
+            sanitized_constraints = {}
+            for group, fluxes in info_dict['constraints'].items():
+                sanitized_constraints[group] = {}
+                for flux, metrics in fluxes.items():
+                    sanitized_constraints[group][flux] = {
+                        (k.__name__ if callable(k) else k): v
+                        for k, v in metrics.items()
+                    }
+            info_dict['constraints'] = sanitized_constraints
 
         # create content
         content = self.template.render(

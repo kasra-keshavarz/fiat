@@ -452,24 +452,56 @@ def compute_metric_dict(sim_series, obs_series, metric_name):
         for name in obs_series
     }
 
-def write_of_csv(output_dir, group, flux_var, metric_name, index, value):
-    """Write a single objective function value to a CSV file."""
+def write_of_csv(output_dir, group, flux_var, metric_name, index, value, prefix=''):
+    """Write a single objective function value to a CSV file.
+    
+    Parameters
+    ----------
+    output_dir : str
+        Directory where the CSV file will be written.
+    group : str
+        Group name (e.g., 'flux', 'custom', 'helper').
+    flux_var : str
+        Flux variable name (e.g., 'QO').
+    metric_name : str
+        Metric name (e.g., 'nse').
+    index : int
+        Index for multiple expressions of the same metric.
+    value : float
+        The metric value to write.
+    prefix : str, optional
+        Prefix to prepend to the filename (e.g., 'constraint_').
+    """
     path = os.path.join(
         output_dir,
-        f'{group}_{flux_var.upper()}_{metric_name}_{index}.csv',
+        f'{prefix}{group}_{flux_var.upper()}_{metric_name}_{index}.csv',
     )
     with open(path, 'w') as f:
         f.write(f'{value}')
 
 def write_penalty_values(eval_config, penalty=1e10):
-    """Write penalty values for all configured objective functions."""
+    """Write penalty values for all configured objective functions and constraints."""
     output_dir = os.path.join('./etc', 'eval')
+    
+    # Write penalty values for objective functions
     for group, group_metrics in eval_config.get('objective_functions').items():
         if any(kw in group for kw in ['flux', 'custom']):
             for flux_var in group_metrics:
                 for idx, metric_name in enumerate(group_metrics[flux_var], start=1):
                     metric_key = metric_name.__name__ if callable(metric_name) else metric_name
                     write_of_csv(output_dir, group, flux_var, metric_key, idx, penalty)
+    
+    # Write penalty values for constraints
+    constraints = eval_config.get('constraints', {})
+    if constraints:
+        for group, group_metrics in constraints.items():
+            if any(kw in group for kw in ['flux', 'custom']):
+                for flux_var in group_metrics:
+                    for metric_name, metric_info in group_metrics[flux_var].items():
+                        metric_key = metric_name.__name__ if callable(metric_name) else metric_name
+                        expressions = metric_info.get('expressions', [])
+                        for idx in range(1, len(expressions) + 1):
+                            write_of_csv(output_dir, group, flux_var, metric_key, idx, penalty, prefix='constraint_')
 
 def normalize_expressions(value):
     """Ensure expressions are a list; wrap a bare string into a single-element list."""
@@ -794,6 +826,114 @@ if __name__ == "__main__":
                                 continue
                             of_values[flux_var][metric_key] = metric_value
                             write_of_csv(output_dir, group, flux_var, metric_key, idx, metric_value)
+
+        # Evaluate constraints (if present)
+        constraints = eval_config.get('constraints', {})
+        if constraints:
+            constraint_helper_ofs = {}
+            constraint_custom_ofs = {}
+
+            for group, group_metrics in constraints.items():
+                # helpers: intermediate constraint metrics not written to CSV
+                if 'helper' in group:
+                    for flux_var, metrics in group_metrics.items():
+                        constraint_helper_ofs[flux_var] = {}
+
+                        for metric_name in metrics:
+                            metric_key = metric_name.__name__ if callable(metric_name) else metric_name
+                            metric_info = metrics[metric_name]
+                            constraint_helper_ofs[flux_var][metric_key] = []
+
+                            if metric_name in hydro_err_ofs or callable(metric_name):
+                                # standard HydroErr metric or user-defined callable
+                                sim_series, obs_series = build_station_series(
+                                    sim_sub, obs_sub, flux_var, station_ids
+                                )
+                                station_metrics = compute_metric_dict(
+                                    sim_series, obs_series, metric_name
+                                )
+                                nan_stations = [
+                                    n for n, v in station_metrics.items()
+                                    if not np.isfinite(v)
+                                ]
+                                if nan_stations:
+                                    warnings.warn(
+                                        f"Constraint metric '{metric_key}' produced non-finite "
+                                        f"value for station(s) {nan_stations} on flux "
+                                        f"'{flux_var}' — excluding from aggregate evaluation."
+                                    )
+                                expressions = normalize_expressions(metric_info.get('expressions'))
+                                for expr in expressions:
+                                    try:
+                                        metric_value = ne.evaluate(expr, local_dict=station_metrics)
+                                    except KeyError:
+                                        continue
+                                    if np.isfinite(metric_value):
+                                        constraint_helper_ofs[flux_var][metric_key].append(metric_value)
+                            else:
+                                # derived helper: expression referencing previously computed constraint helpers
+                                for k in constraint_helper_ofs[flux_var]:
+                                    if isinstance(constraint_helper_ofs[flux_var][k], list):
+                                        constraint_helper_ofs[flux_var][k] = np.array(constraint_helper_ofs[flux_var][k])
+
+                                existing_keys = [k for k in constraint_helper_ofs[flux_var] if k != metric_key]
+                                expressions = normalize_expressions(metric_info.get('expressions'))
+                                for expr in expressions:
+                                    rewritten = rewrite_expr(expr, existing_keys, flux_var, 'constraint_helper_ofs')
+                                    metric_value = eval(rewritten)
+                                    constraint_helper_ofs[flux_var][metric_key] = metric_value
+
+                # custom: expressions referencing constraint helpers, written to CSV
+                elif 'custom' in group:
+                    for flux_var, metrics in group_metrics.items():
+                        constraint_custom_ofs[flux_var] = {}
+
+                        for metric_name in metrics:
+                            metric_key = metric_name.__name__ if callable(metric_name) else metric_name
+                            metric_info = metrics[metric_name]
+                            constraint_custom_ofs[flux_var][metric_key] = []
+
+                            helper_keys = list(constraint_helper_ofs.get(flux_var, {}).keys())
+                            custom_keys = [k for k in constraint_custom_ofs[flux_var] if k != metric_key]
+                            expressions = normalize_expressions(metric_info.get('expressions'))
+
+                            for idx, expr in enumerate(expressions, start=1):
+                                rewritten = rewrite_expr(expr, helper_keys, flux_var, 'constraint_helper_ofs')
+                                rewritten = rewrite_expr(rewritten, custom_keys, flux_var, 'constraint_custom_ofs')
+                                metric_value = eval(rewritten)
+                                constraint_custom_ofs[flux_var][metric_key] = metric_value
+                                write_of_csv(output_dir, group, flux_var, metric_key, idx, metric_value, prefix='constraint_')
+
+                # standard flux-based constraint metrics using HydroErr
+                else:
+                    for flux_var, metrics in group_metrics.items():
+                        sim_series, obs_series = build_station_series(
+                            sim_sub, obs_sub, flux_var, station_ids
+                        )
+
+                        for metric_name, metric_info in metrics.items():
+                            metric_key = metric_name.__name__ if callable(metric_name) else metric_name
+                            station_metrics = compute_metric_dict(
+                                sim_series, obs_series, metric_name
+                            )
+                            nan_stations = [
+                                n for n, v in station_metrics.items()
+                                if not np.isfinite(v)
+                            ]
+                            if nan_stations:
+                                warnings.warn(
+                                    f"Constraint metric '{metric_key}' produced non-finite "
+                                    f"value for station(s) {nan_stations} on flux "
+                                    f"'{flux_var}'."
+                                )
+
+                            expressions = normalize_expressions(metric_info.get('expressions'))
+                            for idx, expr in enumerate(expressions, start=1):
+                                try:
+                                    metric_value = ne.evaluate(expr, local_dict=station_metrics)
+                                except KeyError:
+                                    continue
+                                write_of_csv(output_dir, group, flux_var, metric_key, idx, metric_value, prefix='constraint_')
 
     except (ValueError, TypeError, KeyError) as e:
         warnings.warn(

@@ -182,6 +182,19 @@ class Calibration(object):
                     raise ValueError(
                         f"Unknown objective function group '{group}' in"
                          " `calibration_config['objective_functions']`. ")
+            
+            # Extract fluxes from constraints (if present)
+            constraints = self.calibration_config.get('constraints', {})
+            if constraints:
+                for group, group_dict in constraints.items():
+                    if any(keyword in group for keyword in keyword_group):
+                        for flux in group_dict.keys():
+                            if flux not in fluxes:
+                                fluxes.append(flux)
+                    else:
+                        raise ValueError(
+                            f"Unknown constraint group '{group}' in"
+                             " `calibration_config['constraints']`. ")
 
         # if no fluxes are defined, issue a warning
         if len(fluxes) == 0:
@@ -189,6 +202,25 @@ class Calibration(object):
                 "No fluxes defined in `calibration_config['objective_functions']`. "
                 "At least one flux or state variable must be specified for calibration."
             )
+        
+        # Validate constraint structure (if present)
+        constraints = self.calibration_config.get('constraints', {})
+        if constraints:
+            required_keys = {'lower', 'upper', 'cost_factor', 'expressions'}
+            for group, group_dict in constraints.items():
+                for flux, metrics in group_dict.items():
+                    for metric_name, metric_info in metrics.items():
+                        if not isinstance(metric_info, dict):
+                            raise TypeError(
+                                f"Constraint '{metric_name}' in group '{group}', flux '{flux}' "
+                                f"must be a dictionary with keys: {required_keys}"
+                            )
+                        missing = required_keys - set(metric_info.keys())
+                        if missing:
+                            raise ValueError(
+                                f"Constraint '{metric_name}' in group '{group}', flux '{flux}' "
+                                f"missing required keys: {missing}"
+                            )
 
         # build the model-specific object
         match self.model_software:
@@ -668,6 +700,7 @@ class Calibration(object):
             'dates': self.calibration_config.get('dates'),
             'allow_date_mismatch': self.calibration_config.get('allow_date_mismatch', False),
             'objective_functions': self.calibration_config.get('objective_functions'),
+            'constraints': self.calibration_config.get('constraints'),
             'results_path': 'results',
             'output_files': [self.model.outputs],
             'observations_file': os.path.abspath(os.path.join(
@@ -710,6 +743,22 @@ class Calibration(object):
                     else:
                         new_metrics[metric_name] = value
                 obj_fns[group][flux_var] = new_metrics
+        
+        # Handle callable metric keys in constraints (same pattern as objective_functions)
+        constraints = eval_dict.get('constraints')
+        if constraints:
+            for group in constraints:
+                for flux_var in constraints[group]:
+                    new_metrics = {}
+                    for metric_name, value in constraints[group][flux_var].items():
+                        if callable(metric_name):
+                            name = metric_name.__name__
+                            user_defined_metrics[name] = inspect.getsource(metric_name)
+                            new_metrics[name] = value
+                        else:
+                            new_metrics[metric_name] = value
+                    constraints[group][flux_var] = new_metrics
+        
         if user_defined_metrics:
             eval_dict['user_defined_metrics'] = user_defined_metrics
 
