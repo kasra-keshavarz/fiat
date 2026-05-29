@@ -695,9 +695,9 @@ class MESH(ModelBuilder):
                                             param_name_gen(unit, f"{p}_{class_type}")
                             else:
                                 # GRU-level param: bounds is [min, max]
-                                # Template in the first veg dict that contains it
-                                for i, veg_dict in enumerate(unit_data):
-                                    if p in veg_dict:
+                                # Template in the last veg dict that contains it
+                                for i in range(len(unit_data) - 1, -1, -1):
+                                    if p in unit_data[i]:
                                         self.templated_parameters[group_name][unit][i][p] = \
                                             param_name_gen(unit, p)
                                         break
