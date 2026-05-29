@@ -73,6 +73,10 @@ class ModelBuilder(object):
         Optional constraints applied to parameters by the calibration.
     parameter_bounds : dict
         Optional bounds applied to parameters by the calibration.
+    parameter_initial_values : dict
+        Optional user-supplied initial values for calibrated parameters.
+        Mirrors the structure of ``parameter_bounds``; missing entries fall
+        back to random values drawn from the declared bounds.
     others : dict
         Additional model-specific objects to template (e.g., options files).
     fluxes : Sequence[str]
@@ -155,6 +159,7 @@ class ModelBuilder(object):
         self.templated_parameters = {}
         self.parameter_constraints = {} # to be overridden by child classes
         self.parameter_bounds = {} # to be overridden by child classes
+        self.parameter_initial_values = {} # to be overridden by child classes
         self.model_software = model_software.lower()
 
         # fluxes for outputing

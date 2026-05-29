@@ -126,6 +126,57 @@ The vegetation-specific parameters recognized by MESH/CLASS are: ``fcan``,
 ``rsmn``, ``qa50``, ``vpda``, ``vpdb``, ``psga``, and ``psgb``. All other
 parameters (soil, hydrology, prognostic) are GRU-level.
 
+Define parameter initial values (optional)
+------------------------------------------
+
+By default, FIAT draws a random initial value for every calibrated parameter
+from its bounds.  You can override this on a per-parameter basis by adding a
+``parameter_initial_values`` dictionary to ``model_config``.  The structure
+mirrors ``parameter_bounds`` exactly.  Any parameter **not** listed still
+receives a random initial value.
+
+**Single-vegetation GRU**
+
+.. code-block:: python
+
+   class_dict_initial = {
+       1: {'sdep': 1.5},
+       5: {'sdep': 2.0},
+   }
+
+   hydrology_dict_initial = {
+       1: {'zsnl': 0.15},
+       5: {'zsnl': 0.20},
+   }
+
+   routing_dict_initial = {
+       1: {'r2n': 0.5, 'r1n': 1.0},
+   }
+
+**Mixed-vegetation GRU**
+
+When a GRU has multiple vegetation types, use the same list-of-dicts format
+as for bounds.  Vegetation-specific parameters are per-class; GRU-level
+parameters must be consistent across all entries:
+
+.. code-block:: python
+
+   class_dict_initial = {
+       1: {'sdep': 1.5},  # single-veg GRU
+       4: [                # mixed-veg GRU
+           {'class': 'needleleaf', 'fcan': 0.5, 'lnz0': -2.0, 'sdep': 1.5},
+           {'class': 'broadleaf',  'fcan': 0.3, 'lnz0': 0.0,  'sdep': 1.5},
+       ],
+   }
+
+Validation rules for initial values:
+
+- Every key must exist in ``parameter_bounds``.
+- The value must be numeric and lie **inside** the declared bounds (inclusive).
+- GRU-level parameters in mixed-veg lists must have the **same** value across
+  all vegetation entries.
+- The format (single value vs. per-class dict) must match the bounds format.
+
 Load observations
 -----------------
 
@@ -164,15 +215,20 @@ Instantiate ``Calibration``
                },
            },
        },
-       model_config={
-           'instance_path': '/path/to/wolf-creek-mesh-instance/',
-           'parameter_bounds': {
-               'class': class_dict_bounds,
-               'hydrology': hydrology_dict_bounds,
-               'routing': routing_dict_bounds,
-           },
-           'executable': 'sa_mesh',  # ensure available on PATH or via absolute path
-       },
+        model_config={
+            'instance_path': '/path/to/wolf-creek-mesh-instance/',
+            'parameter_bounds': {
+                'class': class_dict_bounds,
+                'hydrology': hydrology_dict_bounds,
+                'routing': routing_dict_bounds,
+            },
+            'parameter_initial_values': {
+                'class': class_dict_initial,
+                'hydrology': hydrology_dict_initial,
+                'routing': routing_dict_initial,
+            },  # optional; omit to use random initials for all parameters
+            'executable': 'sa_mesh',  # ensure available on PATH or via absolute path
+        },
        observations=[
            {
                'name': 'alaska_72',

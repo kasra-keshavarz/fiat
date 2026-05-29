@@ -597,6 +597,12 @@ class MESH(ModelBuilder):
 
         Ensures analysis is complete, constructs ``templated_parameters`` by
         substituting calibratable names, and assigns bounds from configuration.
+
+        If ``model_config`` contains a ``parameter_initial_values`` key, it is
+        normalized (mixed-veg lists are collapsed to per-class dicts) and
+        validated against ``parameter_bounds``.  The result is stored as
+        ``self.parameter_initial_values`` and consumed by the calibration
+        engine to set starting values in the optimizer input.
         """
         # check whether the instance has been analyzed
         if not self.step_logger['analyze']:
@@ -717,6 +723,95 @@ class MESH(ModelBuilder):
                             "The parameter bounds for each computational unit "
                             "must be provided as a dictionary or a list."
                         )
+        # --- normalize user-supplied initial values (optional) ---
+        normalized_initial_values = copy.deepcopy(
+            self.config.get('parameter_initial_values', {})
+        )
+
+        # Validate every initial value entry
+        for _gname, _gdict in normalized_initial_values.items():
+            if not isinstance(_gdict, dict):
+                continue
+            for _unit, _unit_values in _gdict.items():
+                if isinstance(_unit_values, list):
+                    # Mixed-veg form: list of per-class dicts
+                    for _veg_dict in _unit_values:
+                        _cls = _veg_dict.get('class')
+                        for _p, _val in _veg_dict.items():
+                            if _p == 'class':
+                                continue
+                            self._walk_initial_values(_gname, _unit, _p, _val,
+                                                      class_name=_cls)
+                elif isinstance(_unit_values, dict):
+                    for _p, _val in _unit_values.items():
+                        if isinstance(_val, dict):
+                            # per-class dict: {class_name: value}
+                            for _cls, _cval in _val.items():
+                                self._walk_initial_values(_gname, _unit, _p, _cval,
+                                                          class_name=_cls)
+                        else:
+                            self._walk_initial_values(_gname, _unit, _p, _val)
+
+        if 'class' in normalized_initial_values:
+            for unit, unit_values in normalized_initial_values['class'].items():
+                unit_data = self.parameters['class'][unit]
+                if isinstance(unit_values, list) and not isinstance(unit_data, list):
+                    raise ValueError(
+                        f"GRU {unit} (class '{unit_data['class']}') is a "
+                        f"single-vegetation GRU, but a list of mixed-vegetation "
+                        f"initial values was provided. Use a single dictionary instead."
+                    )
+                if isinstance(unit_values, dict) and isinstance(unit_data, list):
+                    veg_classes = [v['class'] for v in unit_data]
+                    raise ValueError(
+                        f"GRU {unit} is a mixed-vegetation GRU with classes "
+                        f"{veg_classes}, but a single dictionary of initial values was "
+                        f"provided. Use a list of dictionaries (one per "
+                        f"vegetation class) instead."
+                    )
+                if isinstance(unit_values, list):
+                    normalized_initial_values['class'][unit] = \
+                        normalize_mixed_veg_initial_values(unit_values)
+
+        # Final validation: ensure structural consistency with bounds
+        for _gname, _gdict in normalized_initial_values.items():
+            if _gname not in normalized_bounds:
+                raise ValueError(
+                    f"Initial value group {_gname!r} not found in parameter_bounds."
+                )
+            for _unit, _unit_values in _gdict.items():
+                if _unit not in normalized_bounds[_gname]:
+                    raise ValueError(
+                        f"Initial value unit {_unit!r} in group {_gname!r} "
+                        f"not found in parameter_bounds."
+                    )
+                for _p, _val in _unit_values.items():
+                    _bounds = normalized_bounds[_gname][_unit].get(_p)
+                    if _bounds is None:
+                        raise ValueError(
+                            f"Initial value parameter {_p!r} in group {_gname!r}, "
+                            f"unit {_unit} not found in parameter_bounds."
+                        )
+                    if isinstance(_val, dict) and not isinstance(_bounds, dict):
+                        raise TypeError(
+                            f"Initial value for parameter {_p!r} in group {_gname!r}, "
+                            f"unit {_unit} is per-class, but bounds are not per-class."
+                        )
+                    if not isinstance(_val, dict) and isinstance(_bounds, dict):
+                        raise TypeError(
+                            f"Initial value for parameter {_p!r} in group {_gname!r}, "
+                            f"unit {_unit} is a single value, but bounds are per-class."
+                        )
+                    if isinstance(_val, dict) and isinstance(_bounds, dict):
+                        for _cls in _val.keys():
+                            if _cls not in _bounds:
+                                raise ValueError(
+                                    f"Initial value class {_cls!r} for parameter {_p!r} "
+                                    f"in group {_gname!r}, unit {_unit} not found in parameter_bounds."
+                                )
+
+        self.parameter_initial_values = normalized_initial_values
+
         # define parameter bounds (normalized form)
         self.parameter_bounds = normalized_bounds
 
@@ -731,6 +826,15 @@ class MESH(ModelBuilder):
                 f"and cannot use scale {scale!r}; use 'none'."
             )
         self._check_param_exists(group_name, unit, name, class_name)
+
+    def _walk_initial_values(self, group_name, unit, name, value, class_name=None):
+        """Validate a single user-supplied initial value exists and is numeric."""
+        self._check_param_exists(group_name, unit, name, class_name)
+        if not isinstance(value, (int, float)):
+            raise TypeError(
+                f"Initial value for parameter {name!r} (group {group_name!r}, "
+                f"unit {unit}) must be numeric, got {type(value).__name__}."
+            )
 
     def _check_param_exists(self, group_name, unit, name, class_name=None):
         grp = self.parameters.get(group_name)

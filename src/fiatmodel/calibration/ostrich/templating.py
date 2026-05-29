@@ -156,8 +156,54 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         else:
             return f"{val:.6f}"
 
-    def _generate_initial_values(self, bounds_dict, seed=None):
-        """Generate random initial values mirroring ``parameter_bounds`` structure.
+    @staticmethod
+    def _format_initial_value(value, bounds):
+        """Format a user-provided initial value and validate it against bounds.
+
+        Parameters
+        ----------
+        value : int, float, or str
+            User-supplied initial value.
+        bounds : list or tuple
+            ``[min, max, scale]`` or ``[min, max]``.
+
+        Returns
+        -------
+        str
+            Formatted initial value.
+
+        Raises
+        ------
+        ValueError
+            If the value is outside the bounds [min, max].
+        TypeError
+            If the value cannot be converted to float.
+        """
+        min_val = float(bounds[0])
+        max_val = float(bounds[1])
+        scale = bounds[2] if len(bounds) > 2 else 'none'
+
+        try:
+            val = float(value)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(
+                f"Initial value {value!r} cannot be converted to float."
+            ) from exc
+
+        if not (min_val <= val <= max_val):
+            raise ValueError(
+                f"Initial value {val} is outside the bounds "
+                f"[{min_val}, {max_val}] (scale={scale!r})."
+            )
+
+        if scale in ('log10', 'ln'):
+            return f"{val:.6e}"
+        else:
+            return f"{val:.6f}"
+
+    def _generate_initial_values(self, bounds_dict, seed=None,
+                                  initial_values_dict=None):
+        """Generate initial values mirroring ``parameter_bounds`` structure.
 
         Parameters
         ----------
@@ -165,6 +211,9 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
             Nested dict matching ``parameter_bounds``.
         seed : int or None
             Optional random seed for reproducibility.
+        initial_values_dict : dict or None
+            Optional nested dict of user-supplied initial values with the same
+            structure as ``bounds_dict``. Missing entries fall back to random.
 
         Returns
         -------
@@ -174,22 +223,95 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         if seed is not None:
             random.seed(seed)
 
+        if initial_values_dict is None:
+            initial_values_dict = {}
+
+        # Quick validation: ensure no extra keys in initial_values_dict
+        for param_group, user_group in initial_values_dict.items():
+            if param_group not in bounds_dict:
+                raise ValueError(
+                    f"Initial value group {param_group!r} not found in parameter_bounds."
+                )
+            for unit, user_unit in user_group.items():
+                if unit not in bounds_dict[param_group]:
+                    raise ValueError(
+                        f"Initial value unit {unit!r} in group {param_group!r} "
+                        f"not found in parameter_bounds."
+                    )
+                for name, user_param in user_unit.items():
+                    bounds = bounds_dict[param_group][unit].get(name)
+                    if bounds is None:
+                        raise ValueError(
+                            f"Initial value parameter {name!r} in group "
+                            f"{param_group!r}, unit {unit} not found in parameter_bounds."
+                        )
+                    if isinstance(user_param, dict) and isinstance(bounds, dict):
+                        for class_type in user_param.keys():
+                            if class_type not in bounds:
+                                raise ValueError(
+                                    f"Initial value class {class_type!r} for parameter "
+                                    f"{name!r} in group {param_group!r}, unit {unit} "
+                                    f"not found in parameter_bounds."
+                                )
+
         initial_values = {}
         for param_group, param_dict in bounds_dict.items():
             initial_values[param_group] = {}
+            user_group = initial_values_dict.get(param_group, {})
             if not param_dict or not isinstance(param_dict, dict):
                 continue
             for unit, params in param_dict.items():
                 initial_values[param_group][unit] = {}
+                user_unit = user_group.get(unit, {}) if isinstance(user_group, dict) else {}
                 if not isinstance(params, dict):
                     continue
                 for name, bounds in params.items():
+                    user_param = user_unit.get(name) if isinstance(user_unit, dict) else None
                     if isinstance(bounds, dict):
+                        # Per-class bounds
                         initial_values[param_group][unit][name] = {}
-                        for class_type, class_bounds in bounds.items():
-                            initial_values[param_group][unit][name][class_type] = self._draw_initial(class_bounds)
+                        if isinstance(user_param, dict):
+                            for class_type, class_bounds in bounds.items():
+                                if class_type in user_param:
+                                    try:
+                                        initial_values[param_group][unit][name][class_type] = \
+                                            self._format_initial_value(user_param[class_type], class_bounds)
+                                    except (ValueError, TypeError) as exc:
+                                        raise type(exc)(
+                                            f"Parameter {name!r} (group {param_group!r}, "
+                                            f"unit {unit}, class {class_type!r}): {exc}"
+                                        ) from exc
+                                else:
+                                    initial_values[param_group][unit][name][class_type] = \
+                                        self._draw_initial(class_bounds)
+                        elif user_param is not None:
+                            raise TypeError(
+                                f"Parameter {name!r} (group {param_group!r}, unit {unit}): "
+                                f"initial value is a single value, but bounds are per-class. "
+                                f"Provide a dict of per-class values."
+                            )
+                        else:
+                            for class_type, class_bounds in bounds.items():
+                                initial_values[param_group][unit][name][class_type] = \
+                                    self._draw_initial(class_bounds)
                     elif isinstance(bounds, (list, tuple)) and len(bounds) >= 2:
-                        initial_values[param_group][unit][name] = self._draw_initial(bounds)
+                        if isinstance(user_param, dict):
+                            raise TypeError(
+                                f"Parameter {name!r} (group {param_group!r}, unit {unit}): "
+                                f"initial value is a dict (per-class), but bounds are not per-class. "
+                                f"Provide a single numeric value."
+                            )
+                        if user_param is not None:
+                            try:
+                                initial_values[param_group][unit][name] = \
+                                    self._format_initial_value(user_param, bounds)
+                            except (ValueError, TypeError) as exc:
+                                raise type(exc)(
+                                    f"Parameter {name!r} (group {param_group!r}, "
+                                    f"unit {unit}): {exc}"
+                                ) from exc
+                        else:
+                            initial_values[param_group][unit][name] = self._draw_initial(bounds)
         return initial_values
 
     def generate_optimizer_templates(
@@ -224,6 +346,7 @@ class OstrichTemplateEngine(OptimizerTemplateEngine):
         info_dict['initial_values'] = self._generate_initial_values(
             self.model.parameter_bounds,
             seed=info_dict.get('random_seed'),
+            initial_values_dict=getattr(self.model, 'parameter_initial_values', None),
         )
 
         # Sanitize callable keys in objective_functions so that Jinja2

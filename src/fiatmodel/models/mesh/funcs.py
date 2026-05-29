@@ -155,6 +155,59 @@ def normalize_mixed_veg_bounds(bounds_list):
 
     return normalized
 
+
+def normalize_mixed_veg_initial_values(initial_list):
+    """Normalize a list-of-dicts initial values for a mixed-veg GRU.
+
+    Each dict in *initial_list* must contain a ``'class'`` key identifying the
+    vegetation type.  Vegetation-specific parameters get per-class values::
+
+        {"fcan": {"needleleaf": 0.5, "broadleaf": 0.3}}
+
+    GRU-level parameters must agree across all dicts (same value)::
+
+        {"sdep": 1.5}
+
+    Parameters
+    ----------
+    initial_list : list[dict]
+        Each element is ``{'class': '<name>', '<param>': <value>, ...}``.
+
+    Returns
+    -------
+    dict
+        Normalized initial values mapping.
+    """
+    normalized = {}
+
+    for initial_dict in initial_list:
+        class_name = initial_dict['class']
+        for param, value in initial_dict.items():
+            if param == 'class':
+                continue
+            if not isinstance(value, (int, float)):
+                raise TypeError(
+                    f"Initial value for parameter {param!r} must be numeric, "
+                    f"got {type(value).__name__}."
+                )
+            if param in _CLASS_VEG_PARAMS:
+                # veg-specific: store per-class
+                normalized.setdefault(param, {})[class_name] = value
+            else:
+                # GRU-level: must be consistent across all entries
+                if param not in normalized:
+                    normalized[param] = value
+                else:
+                    if normalized[param] != value:
+                        raise ValueError(
+                            f"Inconsistent GRU-level initial value for parameter "
+                            f"{param!r} across mixed-veg entries: "
+                            f"{normalized[param]!r} vs {value!r}."
+                        )
+
+    return normalized
+
+
 def remove_comments(
     string
 ) -> str:

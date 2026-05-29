@@ -329,9 +329,49 @@ bounds.
   - Log-scale requires **strictly positive** bounds (``min > 0``).
   - For mixed-vegetation GRU-level parameters, the scale must be consistent
     across all vegetation entries.
-  - The soil ratio-constrained parameters (``clay1``–``clay3`` and
-    ``sand1``–``sand3``) must use ``"none"``; log transforms are not
-    compatible with the tied-ratio constraint.
+   - The soil ratio-constrained parameters (``clay1``–``clay3`` and
+     ``sand1``–``sand3``) must use ``"none"``; log transforms are not
+     compatible with the tied-ratio constraint.
+
+- ``parameter_initial_values`` *(optional)*: dictionary defining explicit
+  starting values for a subset (or all) calibrated parameters.  When omitted,
+  every parameter receives a random initial value drawn uniformly from its
+  bounds (respecting ``random_seed`` for reproducibility).  When provided,
+  only the listed parameters use the user-supplied values; everything else
+  still falls back to random.
+
+  The structure mirrors ``parameter_bounds`` exactly:
+
+  .. code-block:: python
+
+     "parameter_initial_values": {
+         "class": {
+             1: {"sdep": 1.5},
+             4: [
+                 {"class": "needleleaf", "fcan": 0.5, "lnz0": -2.0},
+                 {"class": "broadleaf",  "fcan": 0.3, "lnz0": 0.0},
+             ],
+         },
+         "hydrology": {15: {"zpls": 0.1}},
+         "routing": {6: {"flz": 1e-5}},
+     }
+
+  Validation rules:
+
+  - Every key (group, unit, parameter, and class when applicable) must
+    exist in ``parameter_bounds``.
+  - The value must be numeric and lie **inside** the declared bounds (inclusive).
+  - Mixed-vegetation GRU-level parameters must be consistent across all
+    vegetation entries (same rule as bounds).
+  - The structural format (single value vs. per-class dict) must match the
+    corresponding bounds format.  A mismatch raises ``TypeError``.
+
+  Log-scale parameters (``log10`` or ``ln``) are formatted in scientific
+  notation; linear parameters are formatted with six decimal places.
+
+- ``executable``: absolute (or relative) path to the model executable used in runs
+  (e.g., ``"sa_mesh"``). If a bare name is given, ensure it is discoverable via
+  ``PATH`` or handled by the workflow’s staging logic.
 
 ``observations``
 ----------------
@@ -428,6 +468,9 @@ Validation checklist
   frequency and have time-aware indexes.
 - Parameter bounds are numeric, ordered as ``[min, max]``, and within model-
   sensible ranges for each GRU/class.
+- If ``parameter_initial_values`` is provided, every entry references a key
+  that exists in ``parameter_bounds``, the value is numeric, and it lies
+  inside the declared bounds.
 - Model executable is available on the system and callable by the workflow.
 
 Minimal instantiation pattern
@@ -462,6 +505,10 @@ Below is the minimal structure you should provide (values are illustrative):
            "class": {1: {"sdep": [0.5, 4.0]}},
            "hydrology": {1: {"zsnl": [0.03, 0.6]}},
            "routing": {1: {"r1n": [0.001, 2.0], "r2n": [0.001, 2.0]}},
+       },
+       "parameter_initial_values": {       # optional
+           "class": {1: {"sdep": 1.5}},    # explicit start for sdep
+           "hydrology": {1: {"zsnl": 0.15}},
        },
        "executable": "sa_mesh",
    }
