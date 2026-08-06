@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "directory": "0o775",
+    "regular_file": "0o664",
+    "executable": "0o775"
+  },
+  "executable_extensions": [".sh", ".py"]
+}

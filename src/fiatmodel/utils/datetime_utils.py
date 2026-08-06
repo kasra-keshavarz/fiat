@@ -1,11 +1,13 @@
-"""Utility functions for Fiat Model."""
-# built-in imports
-from typing import List
+"""Utilities for handling datetime-related objects.
 
-# external
+Provides helpers for working with collections of pandas
+:class:`pandas.DatetimeIndex` objects.
+"""
+# external imports
 import pandas as pd
 
-# "private" global helper functions
+from typing import List
+
 def union_sorted_times(all_times: List[pd.DatetimeIndex]) -> pd.DatetimeIndex:
     """Return the sorted union of multiple DateTime indices.
 

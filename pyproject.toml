@@ -41,6 +41,7 @@ dependencies = [
 include = [
   "src/fiatmodel/**/*.py",
   "src/fiatmodel/models/mesh/defaults.json",
+  "src/fiatmodel/utils/defaults.json",
   "src/fiatmodel/calibration/ostrich/templates/**",
 ]
 

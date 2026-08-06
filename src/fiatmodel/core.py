@@ -663,6 +663,14 @@ class Calibration(object):
         if summarize:
             self._summarize_fiat_inputs(output_path=output_path)
 
+        # 6. set default file and directory permissions
+        set_default_permissions(
+            output_path,
+            executable_names=[
+                os.path.basename(self.model_config['executable'])
+            ] if self.model_config and self.model_config.get('executable') else [],
+        )
+
         return
 
     def _eval(
