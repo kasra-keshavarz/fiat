@@ -20,7 +20,7 @@ Define parameter bounds
 -----------------------
 
 Parameter bounds define the search space for the optimizer. Each parameter
-group (``class``, ``hydrology``, ``routing``) maps integer computational-unit
+group (``class``, ``hydrology``, ``routing``, ``reservoir``) maps computational-unit
 identifiers to dictionaries of ``{parameter_name: [min, max]}``.
 
 For the ``class`` and ``hydrology`` groups, integer keys are **MID values**
@@ -28,7 +28,10 @@ For the ``class`` and ``hydrology`` groups, integer keys are **MID values**
 typically non-contiguous (e.g., ``1, 2, 5, 6, 8, 10, 14, …``) and match the
 column headers in the GRU-dependent section of
 ``MESH_parameters_hydrology.ini``. For ``routing``, keys are river class
-identifiers (0-based).
+identifiers (0-based). For ``reservoir``, keys follow
+``model_config["reservoir_key"]``: reach numbers (``ireach``, default) or
+name / reservoir-id strings (``name``). Calibratable coefficients are ``b1``
+and ``b2``.
 
 **Single-vegetation GRUs**
 
@@ -78,6 +81,19 @@ a flat dictionary:
            'r1n': [0.001, 2.0]
        },
    }
+
+   # reservoir_key = "ireach" (default)
+   reservoir_dict_bounds = {
+       1: {
+           'b1': [0.0, 10.0],
+           'b2': [0.0, 5.0],
+       },
+   }
+   # or the same range on every lake:
+   # reservoir_dict_bounds = {
+   #     '_all': {'b1': [0.0, 10.0], 'b2': [0.0, 5.0]},
+   # }
+   # reservoir_key = "name"  →  {"Ghost Lake": {"b1": [...], "b2": [...]}, ...}
 
 **Mixed-vegetation GRUs**
 
@@ -221,6 +237,7 @@ Instantiate ``Calibration``
                 'class': class_dict_bounds,
                 'hydrology': hydrology_dict_bounds,
                 'routing': routing_dict_bounds,
+                # 'reservoir': reservoir_dict_bounds,  # when MESH_input_reservoir.txt has lakes
             },
             'parameter_initial_values': {
                 'class': class_dict_initial,

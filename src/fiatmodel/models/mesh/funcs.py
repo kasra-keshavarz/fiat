@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import os
 import sys
+import copy
 
 import xarray as xr
 
@@ -799,6 +800,408 @@ def hydrology_section_divide(
 
     return sections
 
+
+# Trailing layout of each MESH_input_reservoir.txt record produced by
+# MESHFlow (see format_reservoir_line / MESH_input_reservoir.txt.jinja):
+#   g10.3(b1) + " " + g10.3(b2) + 25*" " + a12(name) + " " + i2(ireach)
+_RESERVOIR_TRAILER_LEN = 10 + 1 + 10 + 25 + 12 + 1 + 2
+
+# How ``parameter_bounds['reservoir']`` keys map to lakes in the instance.
+# ``ireach``: MESH reach number (``WF_RES`` / ``ireach_num``)
+# ``name``: name / reservoir-id field written in the ``a12`` column
+_RESERVOIR_KEY_ALIASES = {
+    "ireach": "ireach",
+    "reach": "ireach",
+    "wf_res": "ireach",
+    "ireach_num": "ireach",
+    "name": "name",
+    "reservoir_id": "name",
+    "id": "name",
+    "reservoir_name": "name",
+}
+
+
+def normalize_reservoir_key(key_by: NameType | None = None) -> str:
+    """Normalize a ``reservoir_key`` setting to ``'ireach'`` or ``'name'``.
+
+    Parameters
+    ----------
+    key_by : str or None, optional
+        User setting from ``model_config['reservoir_key']``. ``None`` defaults
+        to ``'ireach'``.
+
+    Returns
+    -------
+    str
+        ``'ireach'`` or ``'name'``.
+
+    Raises
+    ------
+    ValueError
+        If ``key_by`` is not a recognized alias.
+    """
+    if key_by is None:
+        return "ireach"
+    token = str(key_by).strip().lower()
+    if token not in _RESERVOIR_KEY_ALIASES:
+        raise ValueError(
+            f"Unsupported reservoir_key {key_by!r}. Use one of: "
+            f"{sorted(set(_RESERVOIR_KEY_ALIASES.values()))} "
+            f"(aliases: {sorted(_RESERVOIR_KEY_ALIASES)})."
+        )
+    return _RESERVOIR_KEY_ALIASES[token]
+
+
+def _parse_reservoir_number(token: str) -> float:
+    """Parse a Fortran-ish numeric token from a reservoir record."""
+    return float(token.strip())
+
+
+def parse_reservoir_record(line: str) -> Tuple[Dict, int]:
+    """Parse one ``MESH_input_reservoir.txt`` lake record.
+
+    Uses the fixed trailing layout written by MESHFlow so names may contain
+    spaces (``a12`` field). Leading latitude/longitude widths distinguish
+    ``LOCATIONFLAG`` 0 (``i5``) from 1 (``f7.1``).
+
+    Parameters
+    ----------
+    line : str
+        One non-empty reservoir record line.
+
+    Returns
+    -------
+    tuple[dict, int]
+        Reservoir entry keyed for FIAT/MESHFlow rendering
+        (``lat_min``, ``lon_min``, ``b1``, ``b2``, ``name``, ``ireach_num``)
+        and the inferred ``location_flag`` (``0`` or ``1``).
+
+    Raises
+    ------
+    ValueError
+        If the line is too short or fields cannot be parsed.
+    """
+    raw = line.rstrip("\n\r")
+    if len(raw) < _RESERVOIR_TRAILER_LEN:
+        raise ValueError(
+            f"Reservoir record is shorter than the expected MESH layout: {line!r}"
+        )
+
+    trailer = raw[-_RESERVOIR_TRAILER_LEN:]
+    prefix = raw[:-_RESERVOIR_TRAILER_LEN].rstrip()
+
+    b1 = _parse_reservoir_number(trailer[0:10])
+    b2 = _parse_reservoir_number(trailer[11:21])
+    name = trailer[46:58].strip()
+    ireach_num = int(trailer[59:61])
+
+    loc_parts = prefix.split()
+    if len(loc_parts) < 2:
+        raise ValueError(
+            f"Reservoir record is missing latitude/longitude fields: {line!r}"
+        )
+    lat_token, lon_token = loc_parts[0], loc_parts[1]
+    location_flag = 1 if ("." in lat_token or "." in lon_token) else 0
+    lat_min = _parse_reservoir_number(lat_token)
+    lon_min = _parse_reservoir_number(lon_token)
+
+    entry = {
+        "lat_min": lat_min,
+        "lon_min": lon_min,
+        "b1": b1,
+        "b2": b2,
+        "name": name,
+        "ireach_num": ireach_num,
+    }
+    return entry, location_flag
+
+
+def _reservoir_dict_key(entry: Dict, key_by: str) -> NameType:
+    """Return the FIAT unit key for a parsed reservoir entry."""
+    if key_by == "ireach":
+        return int(entry["ireach_num"])
+    name = str(entry.get("name", "")).strip()
+    if not name:
+        raise ValueError(
+            "reservoir_key='name' requires a non-empty name/reservoir-id "
+            f"field on each lake record; reach {entry.get('ireach_num')} "
+            "has a blank name."
+        )
+    return name
+
+
+def resolve_reservoir_unit_key(
+    unit: NameType,
+    reservoir_dict: Dict,
+) -> NameType:
+    """Map a user bounds key onto a key present in ``reservoir_dict``.
+
+    Tries exact match, then ``str`` equality (so ``1`` matches ``'1'``), then
+    case-insensitive match for name keys.
+    """
+    if unit in reservoir_dict:
+        return unit
+    for key in reservoir_dict:
+        if str(key) == str(unit):
+            return key
+    unit_l = str(unit).strip().lower()
+    matches = [
+        key for key in reservoir_dict
+        if str(key).strip().lower() == unit_l
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ValueError(
+            f"Reservoir unit {unit!r} is ambiguous among {matches}."
+        )
+    raise ValueError(
+        f"Reservoir unit {unit!r} not found. Available keys: "
+        f"{sorted(reservoir_dict.keys(), key=lambda k: str(k))}."
+    )
+
+
+def _is_reservoir_all_key(unit: NameType) -> bool:
+    """Return True if ``unit`` is the reserved ``'_all'`` expander key."""
+    return str(unit).strip().lower() == "_all"
+
+
+def remap_reservoir_unit_keys(
+    unit_map: Dict,
+    reservoir_dict: Dict,
+) -> Dict:
+    """Rewrite a bounds/initial-values map onto canonical reservoir keys.
+
+    The reserved key ``'_all'`` is not allowed here; use
+    :func:`normalize_reservoir_parameter_map` instead.
+    """
+    if not unit_map:
+        return {}
+    remapped: Dict = {}
+    for unit, payload in unit_map.items():
+        if _is_reservoir_all_key(unit):
+            raise ValueError(
+                "Reservoir unit key '_all' must be expanded via "
+                "normalize_reservoir_parameter_map; it cannot be remapped "
+                "onto a single lake."
+            )
+        resolved = resolve_reservoir_unit_key(unit, reservoir_dict)
+        if resolved in remapped:
+            raise ValueError(
+                f"Reservoir unit keys {unit!r} and another entry both resolve "
+                f"to {resolved!r}."
+            )
+        remapped[resolved] = payload
+    return remapped
+
+
+def normalize_reservoir_parameter_map(
+    unit_map: Dict,
+    reservoir_dict: Dict,
+) -> Dict:
+    """Normalize reservoir bounds/initial-values, expanding ``'_all'``.
+
+    ``"_all": {param: bounds_or_value, ...}`` applies to every lake present in
+    ``reservoir_dict``. Explicit per-lake entries override ``_all`` on a
+    per-parameter basis (merged with ``dict.update``).
+
+    Parameters
+    ----------
+    unit_map : dict
+        User-supplied ``parameter_bounds['reservoir']`` or
+        ``parameter_initial_values['reservoir']``.
+    reservoir_dict : dict
+        Parsed reservoir parameter dict from the MESH instance.
+
+    Returns
+    -------
+    dict
+        Map keyed only by concrete reservoir unit keys (no ``'_all'``).
+    """
+    if not unit_map:
+        return {}
+
+    all_payload = None
+    all_key_count = 0
+    specifics: Dict = {}
+    for unit, payload in unit_map.items():
+        if _is_reservoir_all_key(unit):
+            all_key_count += 1
+            all_payload = payload
+        else:
+            specifics[unit] = payload
+
+    if all_key_count > 1:
+        raise ValueError(
+            "parameter_bounds/initial_values for 'reservoir' may contain "
+            "at most one '_all' entry."
+        )
+
+    remapped_specifics = remap_reservoir_unit_keys(specifics, reservoir_dict)
+
+    if all_payload is None:
+        return remapped_specifics
+
+    if not isinstance(all_payload, dict):
+        raise TypeError(
+            "Reservoir '_all' entry must be a dictionary of parameter "
+            f"bounds/values, got {type(all_payload).__name__}."
+        )
+    if not reservoir_dict:
+        raise ValueError(
+            "Reservoir '_all' was specified, but the MESH instance has no "
+            "reservoirs to expand onto."
+        )
+
+    expanded: Dict = {}
+    for key in reservoir_dict:
+        merged = copy.deepcopy(all_payload)
+        if key in remapped_specifics:
+            override = remapped_specifics[key]
+            if not isinstance(override, dict):
+                raise TypeError(
+                    f"Reservoir unit {key!r} override must be a dictionary, "
+                    f"got {type(override).__name__}."
+                )
+            merged.update(override)
+        expanded[key] = merged
+
+    # Specifics for lakes already merged; any leftover would mean remap
+    # returned keys outside reservoir_dict, which cannot happen.
+    return expanded
+
+
+def parse_mesh_reservoir(
+    reservoir_file: os.PathLike | str,
+    key_by: NameType | None = None,
+) -> Tuple[Dict, Dict]:
+    """Parse ``MESH_input_reservoir.txt`` into FIAT parameter structures.
+
+    Mirrors CLASS parsing: each lake becomes a dict keyed by either reach
+    number or name/reservoir-id (see ``key_by``), containing coefficients and
+    static location metadata needed to re-render the file via MESHFlow.
+
+    Parameters
+    ----------
+    reservoir_file : path-like
+        Path to ``MESH_input_reservoir.txt``.
+    key_by : str or None, optional
+        ``'ireach'`` (default) keys by ``WF_RES`` / ``ireach_num``;
+        ``'name'`` keys by the ``a12`` name field (often MESHFlow's
+        ``reservoir_id``). Aliases are accepted via
+        :func:`normalize_reservoir_key`.
+
+    Returns
+    -------
+    tuple[dict, dict]
+        ``(reservoir_dict, reservoir_meta)`` where ``reservoir_dict`` maps
+        the chosen unit key → parameter dict (``b1``, ``b2``, ``lat_min``,
+        ``lon_min``, ``name``, ``ireach_num``), and ``reservoir_meta`` holds
+        ``location_flag``, ``n_reservoirs``, and ``key_by``.
+    """
+    key_mode = normalize_reservoir_key(key_by)
+    empty_meta = {
+        "location_flag": 0,
+        "n_reservoirs": 0,
+        "key_by": key_mode,
+    }
+
+    text = Path(reservoir_file).read_text(encoding="utf-8")
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return {}, empty_meta
+
+    header_parts = lines[0].split()
+    if not header_parts:
+        return {}, empty_meta
+
+    n_reservoirs = int(float(header_parts[0]))
+    if n_reservoirs <= 0:
+        return {}, empty_meta
+
+    record_lines = lines[1:1 + n_reservoirs]
+    if len(record_lines) < n_reservoirs:
+        raise ValueError(
+            f"MESH_input_reservoir.txt header declares {n_reservoirs} "
+            f"reservoir(s), but only {len(record_lines)} record line(s) "
+            f"were found in `{reservoir_file}`."
+        )
+
+    reservoir_dict: Dict = {}
+    location_flag = 0
+    for idx, line in enumerate(record_lines):
+        entry, flag = parse_reservoir_record(line)
+        if idx == 0:
+            location_flag = flag
+        key = _reservoir_dict_key(entry, key_mode)
+        if key in reservoir_dict:
+            label = "reach id" if key_mode == "ireach" else "name/reservoir id"
+            raise ValueError(
+                f"Duplicate reservoir {label} {key!r} in `{reservoir_file}`."
+            )
+        reservoir_dict[key] = entry
+
+    meta = {
+        "location_flag": int(location_flag),
+        "n_reservoirs": int(n_reservoirs),
+        "key_by": key_mode,
+    }
+    return reservoir_dict, meta
+
+
+def reservoir_params_to_context(
+    reservoir_params: Dict,
+    location_flag: int = 0,
+) -> Dict:
+    """Build a MESHFlow ``render_reservoir_template`` context from FIAT params.
+
+    Parameters
+    ----------
+    reservoir_params : dict
+        Mapping of unit key → reservoir entry (as produced by
+        :func:`parse_mesh_reservoir` and updated during Ostrich iterations).
+        Entries are ordered by ``ireach_num`` for MESH file layout regardless
+        of whether keys are reach numbers or names.
+    location_flag : int, optional
+        MESH ``LOCATIONFLAG`` (``0`` or ``1``).
+
+    Returns
+    -------
+    dict
+        Context with ``n_reservoirs``, ``location_flag``, and ``reservoirs``.
+    """
+    if not reservoir_params:
+        return {
+            "n_reservoirs": 0,
+            "location_flag": int(location_flag),
+            "reservoirs": [],
+        }
+
+    ordered = sorted(
+        reservoir_params.items(),
+        key=lambda item: int(item[1].get("ireach_num", 0)),
+    )
+
+    reservoirs = []
+    for _key, entry in ordered:
+        reservoirs.append(
+            {
+                "lat_min": float(entry["lat_min"]),
+                "lon_min": float(entry["lon_min"]),
+                "b1": float(entry["b1"]),
+                "b2": float(entry["b2"]),
+                "name": str(entry.get("name", "")),
+                "ireach_num": int(entry.get("ireach_num", 0)),
+            }
+        )
+
+    return {
+        "n_reservoirs": len(reservoirs),
+        "location_flag": int(location_flag),
+        "reservoirs": reservoirs,
+    }
+
+
 def param_name_gen(
     computational_unit: NameType,
     name: NameType,
@@ -808,7 +1211,10 @@ def param_name_gen(
     Parameters
     ----------
     computational_unit : str or int or float
-        Identifier of the hydrological unit (e.g., GRU index).
+        Identifier of the hydrological unit (e.g., GRU index or reservoir
+        name). Non-alphanumeric characters in the unit are replaced with
+        ``_`` so Ostrich tokens stay valid (e.g., ``Ghost Lake`` →
+        ``_GHOST_LAKEB1``).
     name : str or int or float
         Base parameter name.
 
@@ -817,15 +1223,16 @@ def param_name_gen(
     str
         Uppercased name prefixed with ``_`` and the unit (e.g., ``_1FOO``).
     """
-    # making strings
-    _unit = str(computational_unit)
+    # Sanitize unit tokens for Ostrich (names may contain spaces / punctuation)
+    _unit = re.sub(r'[^0-9A-Za-z]+', '_', str(computational_unit)).strip('_')
     _name = str(name)
 
     # A naming template like the following can be
     # generalized to all models: _+`_unit`+`_name`
     param_name = '_' + _unit.upper() + _name.upper()
-    
+
     return param_name
+
 
 def parse_parameters_nc(
     nc_file: os.PathLike | str,

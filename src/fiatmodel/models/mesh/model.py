@@ -83,9 +83,10 @@ class MESH(ModelBuilder):
     outputs : list[str]
         Expected output NetCDF files for selected fluxes.
     parameters : dict
-        Assembled parameter structures (CLASS, hydrology, routing).
+        Assembled parameter structures (CLASS, hydrology, routing, reservoir).
     others : dict
-        Auxiliary metadata such as ``case_entry`` and ``info_entry``.
+        Auxiliary metadata such as ``case_entry``, ``info_entry``, and
+        ``reservoir_meta``.
 
     Methods
     -------
@@ -444,6 +445,10 @@ class MESH(ModelBuilder):
         # analyze hydrology and routing files and build the parameter dictionaries
         routing_dict, hydrology_dict = self._analyze_mesh_hydrology()
 
+        # analyze reservoir file (power-curve coeffs b1/b2); same dict-of-units
+        # shape as CLASS so Ostrich templating can treat it identically
+        reservoir_dict, reservoir_meta = self._analyze_mesh_reservoir()
+
         # model's raw parameters dictionary
         # the keys are hard-coded and documented in the model-specific
         # MESH builder documentation
@@ -451,6 +456,7 @@ class MESH(ModelBuilder):
             'class': class_dict,
             'hydrology': hydrology_dict,
             'routing': routing_dict,
+            'reservoir': reservoir_dict,
         }
 
         self.others = {
@@ -466,6 +472,10 @@ class MESH(ModelBuilder):
                 'type': 'nc',
                 'data': parse_parameters_nc(
                     os.path.join(self.config['instance_path'], 'MESH_parameters.nc')),
+            },
+            'reservoir_meta': {
+                'type': 'json',
+                'data': reservoir_meta,
             },
         }
 
@@ -618,6 +628,15 @@ class MESH(ModelBuilder):
         # to [min, max] (widest range across all dicts).
         normalized_bounds = copy.deepcopy(self.config['parameter_bounds'])
 
+        # Align reservoir unit keys to the parsed dict (ireach vs name, and
+        # soft str/int / case-insensitive matches). Expand reserved key
+        # ``'_all'`` onto every lake; explicit units override per-parameter.
+        if 'reservoir' in normalized_bounds and 'reservoir' in self.parameters:
+            normalized_bounds['reservoir'] = normalize_reservoir_parameter_map(
+                normalized_bounds['reservoir'],
+                self.parameters['reservoir'],
+            )
+
         # Validate every bounds entry once up front so errors are reported
         # before any templating work. This walker enforces three properties:
         #   1) the bounds entry itself is well-formed (delegated to
@@ -727,6 +746,12 @@ class MESH(ModelBuilder):
         normalized_initial_values = copy.deepcopy(
             self.config.get('parameter_initial_values', {})
         )
+
+        if 'reservoir' in normalized_initial_values and 'reservoir' in self.parameters:
+            normalized_initial_values['reservoir'] = normalize_reservoir_parameter_map(
+                normalized_initial_values['reservoir'],
+                self.parameters['reservoir'],
+            )
 
         # Validate every initial value entry
         for _gname, _gdict in normalized_initial_values.items():
@@ -1292,3 +1317,26 @@ class MESH(ModelBuilder):
 
 
         return routing_dict, hydrology_dict
+
+    def _analyze_mesh_reservoir(self) -> tuple:
+        """Analyze reservoir components from ``MESH_input_reservoir.txt``.
+
+        Unit keys follow ``model_config['reservoir_key']`` (``'ireach'`` or
+        ``'name'``; default ``'ireach'``).
+
+        Returns
+        -------
+        tuple
+            ``(reservoir_dict, reservoir_meta)`` where ``reservoir_dict`` maps
+            the chosen unit key to parameter dicts (same shape as CLASS
+            units), and ``reservoir_meta`` holds ``location_flag``,
+            ``n_reservoirs``, and ``key_by`` for MESHFlow rendering.
+        """
+        reservoir_path = os.path.join(
+            self.config['instance_path'],
+            'MESH_input_reservoir.txt',
+        )
+        return parse_mesh_reservoir(
+            reservoir_path,
+            key_by=self.config.get('reservoir_key', 'ireach'),
+        )

@@ -9,7 +9,8 @@ for MESH-based workflows. It performs the following high-level steps:
     optionally converting numeric-like strings to native numbers for robust
     templating and arithmetic.
 - Renders model input templates via :mod:`meshflow` using parameters/others
-    files in ``./etc/eval`` and writes them into the model instance directory.
+    files in ``./etc/eval`` and writes them into the model instance directory
+    (CLASS, hydrology/routing, and reservoir inputs).
 - Executes the MESH model executable and collects simulation results.
 - Aligns observations and simulations across one or more calibration date
     intervals, inferring/resampling time frequency when needed.
@@ -64,6 +65,7 @@ from pandas.tseries.offsets import DateOffset
 
 # fiat imports
 from fiatmodel.models.valid_ofs import hydro_err_ofs # python list object
+from fiatmodel.models.mesh.funcs import reservoir_params_to_context
 
 
 # MESH-specific import
@@ -626,12 +628,33 @@ if __name__ == "__main__":
         **kwargs,
     )
 
+    # reservoirs (power-curve coeffs); optional when the instance has none
+    reservoir_file = None
+    if 'reservoir' in mesh_inputs:
+        location_flag = 0
+        if isinstance(mesh_inputs.get('reservoir_meta'), dict):
+            location_flag = int(
+                mesh_inputs['reservoir_meta'].get('location_flag', 0)
+            )
+        reservoir_context = reservoir_params_to_context(
+            mesh_inputs['reservoir'],
+            location_flag=location_flag,
+        )
+        reservoir_file = mf.utility.render_reservoir_template(reservoir_context)
+
     # apply changes to the MESH instance
     with open(os.path.join(eval_config['model_instance_path'], "MESH_parameters_CLASS.ini"), "w", encoding="utf-8") as f:
         f.write(class_file)
     with open(os.path.join(eval_config['model_instance_path'], "MESH_parameters_hydrology.ini"), "w", encoding="utf-8") as f:
         f.write(hydrology_file)
     parameters_ds.to_netcdf(os.path.join(eval_config['model_instance_path'], "MESH_parameters.nc"))
+    if reservoir_file is not None:
+        with open(
+            os.path.join(eval_config['model_instance_path'], "MESH_input_reservoir.txt"),
+            "w",
+            encoding="utf-8",
+        ) as f:
+            f.write(reservoir_file)
 
     # run the MESH model
     my_env = os.environ.copy()

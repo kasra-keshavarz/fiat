@@ -156,6 +156,15 @@ bounds.
 - ``instance_path``: path (string) to the model instance directory. For MESH,
   this should contain required model input files and will be used as a template
   for generated runs.
+- ``reservoir_key``: optional string selecting how ``parameter_bounds["reservoir"]``
+  units are identified. Defaults to ``"ireach"``.
+
+  - ``"ireach"`` (aliases: ``"reach"``, ``"wf_res"``, ``"ireach_num"``): keys are
+    MESH reach numbers (``WF_RES`` / last field on each lake line).
+  - ``"name"`` (aliases: ``"reservoir_id"``, ``"id"``, ``"reservoir_name"``): keys
+    are the name / reservoir-id field (``a12`` column; often MESHFlow's
+    ``reservoir_id``).
+
 - ``parameter_bounds``: dictionary defining the search space per parameter
   group. The schema of this dictionary is dependant on the hydrological model
   of choice. For example, expected keys for the MESH model include:
@@ -163,6 +172,7 @@ bounds.
   - ``"class"``: mapping MESH GRU to parameter bounds
   - ``"hydrology"``: mapping MESH GRU to parameter bounds
   - ``"routing"``: mapping MESH river class to parameter bounds
+  - ``"reservoir"``: mapping reservoir units to parameter bounds
 
   For the ``class`` and ``hydrology`` groups, the integer keys
   are **MID values** (Mosaic Identifier) as defined in the model's
@@ -172,7 +182,14 @@ bounds.
   (e.g., ``1, 2, 5, 6, 8, 10, 14, …``) and directly correspond to
   the column headers printed in the GRU-dependent parameter section of
   ``MESH_parameters_hydrology.ini``. For the ``routing`` group, integer keys
-  reference river class identifiers (0-based).
+  reference river class identifiers (0-based). For the ``reservoir`` group,
+  keys follow ``reservoir_key``: reach numbers when ``"ireach"``, or name /
+  reservoir-id strings when ``"name"``. The reserved key ``"_all"`` expands
+  the same parameter bounds onto every lake in the instance (each lake still
+  gets its own Ostrich parameters); explicit per-lake entries override
+  ``"_all"`` on a per-parameter basis. Calibratable reservoir coefficients are
+  ``b1`` and ``b2`` (MESH ``WF_B1`` / ``WF_B2``); location and name fields
+  are carried through for MESHFlow re-rendering but are usually left fixed.
   For more information, refer to the `MESH model documentation <https://mesh-model.atlassian.net/wiki/spaces/USER/overview?mode=global>`_
   and the `MESHFlow workflow guide <https://mesh-workflow.readthedocs.io/en/latest/>`_.
 
@@ -195,6 +212,21 @@ bounds.
          "routing": {
              1: {"r1n": [0.001, 2.0], "r2n": [0.001, 2.0]},
          },
+         # with model_config["reservoir_key"] = "ireach" (default):
+         "reservoir": {
+             1: {"b1": [0.0, 10.0], "b2": [0.0, 5.0]},
+             2: {"b1": [0.0, 10.0]},
+         },
+         # or apply the same bounds to every lake (per-lake Ostrich params):
+         # "reservoir": {
+         #     "_all": {"b1": [0.0, 10.0], "b2": [0.0, 5.0]},
+         #     3: {"b1": [0.0, 8.0]},  # optional override for reach 3
+         # },
+         # with model_config["reservoir_key"] = "name":
+         # "reservoir": {
+         #     "Ghost Lake": {"b1": [0.0, 10.0], "b2": [0.0, 5.0]},
+         #     "R-101": {"b1": [0.0, 10.0]},
+         # },
      }
 
   Here, ``1`` and ``2`` under ``"class"`` are MID values from the
@@ -259,8 +291,8 @@ bounds.
   .. note::
 
      The mixed-vegetation format only applies to the ``"class"`` parameter
-     group. The ``"hydrology"`` and ``"routing"`` groups always use the
-     standard flat-dictionary format.
+     group. The ``"hydrology"``, ``"routing"``, and ``"reservoir"`` groups
+     always use the standard flat-dictionary format.
 
   .. warning::
 
@@ -501,14 +533,17 @@ Below is the minimal structure you should provide (values are illustrative):
 
    model_config = {
        "instance_path": "/path/to/mesh/instance/",
+       "reservoir_key": "ireach",  # or "name" / "reservoir_id"
        "parameter_bounds": {
            "class": {1: {"sdep": [0.5, 4.0]}},
            "hydrology": {1: {"zsnl": [0.03, 0.6]}},
            "routing": {1: {"r1n": [0.001, 2.0], "r2n": [0.001, 2.0]}},
+           "reservoir": {1: {"b1": [0.0, 10.0], "b2": [0.0, 5.0]}},
        },
        "parameter_initial_values": {       # optional
            "class": {1: {"sdep": 1.5}},    # explicit start for sdep
            "hydrology": {1: {"zsnl": 0.15}},
+           "reservoir": {1: {"b1": 0.15, "b2": 0.25}},
        },
        "executable": "sa_mesh",
    }
