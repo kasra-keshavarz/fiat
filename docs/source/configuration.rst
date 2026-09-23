@@ -91,7 +91,9 @@ The following entries provide necessary information for the package. In brief:
   calibration window.
 - ``objective_functions``: mapping of observations to metrics. The outer keys
   correspond to observation ``name``s (e.g., ``"QO"`` for discharge in MESH). Each value is
-  a dictionary mapping a metric name to a list of weighted observation terms.
+  a dictionary mapping a metric name to its expression(s) — either a single
+  string or a list of weighted observation terms — or to a mapping that
+  additionally carries per-metric keyword arguments (see below).
   Example structure:
 
 
@@ -139,6 +141,41 @@ In the example above, the KGE 2012 metric is computed for two observations
 as a weighted combination of both observations (with equal weights of ``0.5``).
 Therefore, 3 objective function values will be reported to the optimizer
 per iteration in this case.
+
+**Per-metric keyword arguments**
+
+Any metric value may instead be given as a mapping with an ``expressions`` key
+(the same string or list of expressions as above) plus an optional ``kwargs``
+mapping. Those keyword arguments are forwarded verbatim to the metric
+function — a HydroErr function or a user-defined callable — as
+``metric_func(simulated, observed, **kwargs)``. This is useful to match the
+valid-pair semantics of a verification pipeline, for example:
+
+.. code-block:: python
+
+    {"QO":
+        {
+            "kge_2012": {
+                "expressions": [
+                    "-1 * alaska_72",
+                    "-1 * alaska_73"
+                ],
+                "kwargs": {"remove_zero": True, "remove_neg": True}
+            }
+        }
+    }
+
+The mapping form is equivalent to the string/list form when ``kwargs`` is
+omitted or empty, so existing configurations keep working unchanged. Unknown
+keys inside the mapping, and ``kwargs`` attached to metrics that have no
+function to receive them (derived helpers in a ``helper`` group and ``custom``
+expressions, which reference other metrics), raise a ``ValueError`` before the
+model is executed.
+
+Constraints support the same options: pass ``kwargs`` as an additional key
+alongside ``lower``, ``upper``, ``cost_factor``, and ``expressions``, e.g.
+``{"lower": -25.0, "upper": 25.0, "cost_factor": 100,
+"expressions": ["MY_OBS"], "kwargs": {"remove_zero": True}}``.
 
 .. warning::
 
