@@ -210,8 +210,10 @@ Instantiate ``Calibration``
                },
            ],
            'objective_functions': {
-               'QO': {
-                   'kge_2012': ['-1 * alaska_72'],
+               'flux': {
+                   'QO': {
+                       'kge_2012': ['-1 * alaska_72'],
+                   },
                },
            },
        },
@@ -241,6 +243,40 @@ Instantiate ``Calibration``
            },
        ],
    )
+
+Add optimization constraints (optional)
+---------------------------------------
+
+To bound a performance metric — for example, keeping PBIAS within the
+``[-25, +25]`` percent range — define a constraint metric (here a small
+callable, because PBIAS is not part of HydroErr) and add it under
+``calibration_config['constraints']``:
+
+.. code-block:: python
+
+   def pbias(sim, obs):
+       """Percent bias (not part of HydroErr)."""
+       return 100.0 * (obs - sim).sum() / obs.sum()
+
+   # include this entry in the calibration_config above
+   constraints = {
+       'flux': {
+           'QO': {
+               pbias: {
+                   'lower': -25.0,
+                   'upper': 25.0,
+                   'cost_factor': 100,
+                   'expressions': ['alaska_72'],
+               },
+           },
+       },
+   }
+
+Whenever the metric leaves its bounds, Ostrich adds a penalty to the system
+cost; values inside the bounds are free. See :doc:`constraints` for the full
+reference and the
+``wolf-creek-calibration-with-constraints.ipynb`` notebook for a complete
+runnable example.
 
 Prepare the workflow
 --------------------
