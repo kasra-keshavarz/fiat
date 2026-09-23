@@ -534,7 +534,7 @@ class MESH(ModelBuilder):
             #        revisited in future releases.
             calibration_constraints = {}
 
-            for unit in self.parameter_bounds['class'].keys():
+            for unit in (self.parameter_bounds.get('class', {}) or {}).keys():
                 # creating a set of parameters for the computational
                 # unit to be calibrated
                 calibrated_set = set(self.parameter_bounds['class'][unit].keys())
@@ -603,6 +603,13 @@ class MESH(ModelBuilder):
         validated against ``parameter_bounds``.  The result is stored as
         ``self.parameter_initial_values`` and consumed by the calibration
         engine to set starting values in the optimizer input.
+
+        If ``model_config`` contains a ``parameter_ties`` key (a mapping of
+        parameter group to a list of parameter names), each tied parameter is
+        represented by a single calibration proxy shared by every
+        computational unit of that group (for example one global
+        ``flz``/``pwr`` for all routing units). Bounds for a tied parameter
+        must be supplied for exactly one representative unit.
         """
         # check whether the instance has been analyzed
         if not self.step_logger['analyze']:
@@ -723,6 +730,13 @@ class MESH(ModelBuilder):
                             "The parameter bounds for each computational unit "
                             "must be provided as a dictionary or a list."
                         )
+
+        # --- apply parameter ties (grouped/global calibration parameters) ---
+        # Tied parameters share a single OSTRICH proxy across all units of a
+        # group so that one calibrated value drives every unit. See
+        # ``_apply_parameter_ties`` for the supported structures.
+        self._apply_parameter_ties(normalized_bounds)
+
         # --- normalize user-supplied initial values (optional) ---
         normalized_initial_values = copy.deepcopy(
             self.config.get('parameter_initial_values', {})
@@ -816,6 +830,120 @@ class MESH(ModelBuilder):
         self.parameter_bounds = normalized_bounds
 
         return
+
+    def _apply_parameter_ties(self, normalized_bounds: Dict) -> None:
+        """Propagate a representative proxy across tied computational units.
+
+        Reads ``self.config['parameter_ties']``, a mapping of parameter group
+        to a list of parameter names that must share one calibrated value
+        across all units of that group. Bounds for each tied parameter must be
+        supplied for exactly one representative unit (e.g. unit ``1``); the
+        proxy name generated for that unit is written to every other unit
+        holding the same parameter. Because OSTRICH substitutes tokens
+        globally in the generated parameter templates, all units then receive
+        the same calibrated value from a single ``BeginParams`` entry.
+
+        Parameters
+        ----------
+        normalized_bounds : dict
+            Normalized bounds dictionary mirroring ``parameter_bounds``.
+
+        Raises
+        ------
+        TypeError
+            If ``parameter_ties`` or one of its entries has an invalid type.
+        ValueError
+            If a tied parameter is unknown, has no bounds, or has bounds for
+            more than one unit.
+        NotImplementedError
+            If a tied parameter belongs to a mixed-vegetation GRU, which
+            requires per-class proxies and is not supported yet.
+        """
+        ties = self.config.get('parameter_ties')
+        if not ties:
+            return
+
+        if not isinstance(ties, dict):
+            raise TypeError(
+                "`parameter_ties` must be a mapping of parameter group to a "
+                "list of parameter names."
+            )
+
+        for group_name, names in ties.items():
+            if group_name not in self.parameters:
+                raise ValueError(
+                    f"`parameter_ties` references unknown parameter group "
+                    f"{group_name!r}."
+                )
+            if isinstance(names, str):
+                names = [names]
+            if not isinstance(names, (list, tuple, set)):
+                raise TypeError(
+                    f"`parameter_ties[{group_name!r}]` must be a list of "
+                    f"parameter names."
+                )
+
+            group_parameters = self.parameters[group_name]
+            group_bounds = normalized_bounds.get(group_name, {})
+
+            for name in names:
+                units_with_bounds = [
+                    unit
+                    for unit, unit_bounds in group_bounds.items()
+                    if isinstance(unit_bounds, dict) and name in unit_bounds
+                ]
+                if len(units_with_bounds) != 1:
+                    raise ValueError(
+                        f"Tied parameter {group_name!r}.{name!r} must have "
+                        f"bounds for exactly one computational unit; got "
+                        f"{sorted(units_with_bounds)}."
+                    )
+                rep_unit = units_with_bounds[0]
+
+                if isinstance(group_parameters, list):
+                    rep_data = group_parameters[rep_unit - 1]
+                    if name not in rep_data:
+                        raise ValueError(
+                            f"Tied parameter {name!r} not found in group "
+                            f"{group_name!r}, unit {rep_unit!r}."
+                        )
+                    proxy = self.templated_parameters[group_name][rep_unit - 1][name]
+                    for i, unit_data in enumerate(group_parameters):
+                        if isinstance(unit_data, dict) and name in unit_data:
+                            self.templated_parameters[group_name][i][name] = proxy
+
+                elif isinstance(group_parameters, dict):
+                    rep_data = group_parameters[rep_unit]
+                    if isinstance(rep_data, list):
+                        raise NotImplementedError(
+                            f"Tied parameter {group_name!r}.{name!r} belongs to "
+                            f"a mixed-vegetation GRU (unit {rep_unit!r}); "
+                            f"per-class ties are not supported yet."
+                        )
+                    if name not in rep_data:
+                        raise ValueError(
+                            f"Tied parameter {name!r} not found in group "
+                            f"{group_name!r}, unit {rep_unit!r}."
+                        )
+                    proxy = self.templated_parameters[group_name][rep_unit][name]
+                    for unit, unit_data in group_parameters.items():
+                        if isinstance(unit_data, dict):
+                            if name in unit_data:
+                                self.templated_parameters[group_name][unit][name] = proxy
+                        elif isinstance(unit_data, list):
+                            if any(name in veg_dict for veg_dict in unit_data):
+                                raise NotImplementedError(
+                                    f"Tied parameter {group_name!r}.{name!r} "
+                                    f"appears in mixed-vegetation GRU unit "
+                                    f"{unit!r}; per-class ties are not supported yet."
+                                )
+
+                else:
+                    raise TypeError(
+                        f"Unsupported parameter structure for group "
+                        f"{group_name!r}: "
+                        f"{type(group_parameters).__name__}."
+                    )
 
     def _walk_bounds(self, group_name, unit, name, bnd, class_name=None):
         lo, hi, scale = parse_param_bounds(bnd)
