@@ -571,11 +571,16 @@ def build_station_series(sim_sub, obs_sub, flux_var, station_ids):
         obs_series[name] = obs_sub[flux_var].sel(subbasin=st).to_series()
     return sim_series, obs_series
 
-def compute_metric_dict(sim_series, obs_series, metric_name):
+def compute_metric_dict(sim_series, obs_series, metric_name, metric_kwargs=None):
     """Compute a metric for each station.
 
     ``metric_name`` can be a string (looked up from *HydroErr*) or a
     callable that accepts ``(simulated, observed)`` and returns a scalar.
+
+    ``metric_kwargs``, if provided, is forwarded verbatim to the metric
+    function as ``metric_func(simulated, observed, **metric_kwargs)``. This
+    lets callers use per-metric options such as HydroErr's
+    ``remove_zero``/``remove_neg`` valid-pair masking.
 
     Returns a dictionary keyed by station name with scalar metric values.
 
@@ -599,8 +604,9 @@ def compute_metric_dict(sim_series, obs_series, metric_name):
             f"metric and is not a callable. Provide a valid HydroErr "
             f"metric name or a callable accepting (simulated, observed)."
         )
+    metric_kwargs = metric_kwargs or {}
     return {
-        name: metric_func(sim_series[name], obs_series[name])
+        name: metric_func(sim_series[name], obs_series[name], **metric_kwargs)
         for name in obs_series
     }
 
@@ -632,34 +638,159 @@ def write_of_csv(output_dir, group, flux_var, metric_name, index, value, prefix=
         f.write(f'{value}')
 
 def write_penalty_values(eval_config, penalty=1e10):
-    """Write penalty values for all configured objective functions and constraints."""
+    """Write penalty values for all configured objective functions and constraints.
+
+    The filenames mirror the ResponseVars rendered by the OSTRICH template:
+    every non-helper group contributes one file per expression, with the
+    expression index restarting at 1 for each metric. Helper groups only
+    produce intermediate values and are therefore skipped.
+    """
     output_dir = os.path.join('./etc', 'eval')
     
     # Write penalty values for objective functions
-    for group, group_metrics in eval_config.get('objective_functions').items():
-        if any(kw in group for kw in ['flux', 'custom']):
-            for flux_var in group_metrics:
-                for idx, metric_name in enumerate(group_metrics[flux_var], start=1):
-                    metric_key = metric_name.__name__ if callable(metric_name) else metric_name
+    for group, group_metrics in (eval_config.get('objective_functions') or {}).items():
+        if 'helper' in group:
+            continue
+        for flux_var, metrics in group_metrics.items():
+            for metric_name, spec in metrics.items():
+                metric_key = metric_name.__name__ if callable(metric_name) else metric_name
+                expressions, _ = normalize_metric_spec(spec)
+                for idx in range(1, len(expressions) + 1):
                     write_of_csv(output_dir, group, flux_var, metric_key, idx, penalty)
     
     # Write penalty values for constraints
-    constraints = eval_config.get('constraints', {})
-    if constraints:
-        for group, group_metrics in constraints.items():
-            if any(kw in group for kw in ['flux', 'custom']):
-                for flux_var in group_metrics:
-                    for metric_name, metric_info in group_metrics[flux_var].items():
-                        metric_key = metric_name.__name__ if callable(metric_name) else metric_name
-                        expressions = metric_info.get('expressions', [])
-                        for idx in range(1, len(expressions) + 1):
-                            write_of_csv(output_dir, group, flux_var, metric_key, idx, penalty, prefix='constraint_')
+    constraints = eval_config.get('constraints') or {}
+    for group, group_metrics in constraints.items():
+        if 'helper' in group:
+            continue
+        for flux_var, metrics in group_metrics.items():
+            for metric_name, metric_info in metrics.items():
+                metric_key = metric_name.__name__ if callable(metric_name) else metric_name
+                expressions = normalize_expressions(metric_info.get('expressions', []))
+                for idx in range(1, len(expressions) + 1):
+                    write_of_csv(output_dir, group, flux_var, metric_key, idx, penalty, prefix='constraint_')
 
 def normalize_expressions(value):
     """Ensure expressions are a list; wrap a bare string into a single-element list."""
     if isinstance(value, list):
         return value
     return [value]
+
+def normalize_metric_spec(value):
+    """Normalize a metric specification into ``(expressions, kwargs)``.
+
+    Objective/constraint metric values historically accepted two forms:
+
+    - a plain expression string, or
+    - a list of expression strings.
+
+    This function additionally accepts a mapping of the form::
+
+        {"expressions": <str or list>, "kwargs": {<metric function kwargs>}}
+
+    ``expressions`` is required; ``kwargs`` is optional and defaults to an
+    empty mapping. Unknown keys raise :class:`ValueError`.
+
+    Returns
+    -------
+    tuple
+        ``(expressions, kwargs)`` where ``expressions`` is always a list and
+        ``kwargs`` is always a dict.
+    """
+    if isinstance(value, dict):
+        unknown = set(value) - {'expressions', 'kwargs'}
+        if unknown:
+            raise ValueError(
+                f"Unknown key(s) {sorted(unknown)} in metric specification; "
+                "allowed keys are 'expressions' and 'kwargs'."
+            )
+        if 'expressions' not in value:
+            raise ValueError(
+                "Metric specification is missing the required 'expressions' key."
+            )
+        kwargs = value.get('kwargs', {})
+        if kwargs is None:
+            kwargs = {}
+        if not isinstance(kwargs, dict):
+            raise TypeError(
+                "Metric specification 'kwargs' must be a mapping of keyword "
+                f"arguments, got {type(kwargs).__name__}."
+            )
+        return normalize_expressions(value['expressions']), kwargs
+    return normalize_expressions(value), {}
+
+def validate_metric_specs(eval_config):
+    """Validate per-metric specifications before any model execution.
+
+    Ensures metric mappings use only supported keys (via
+    :func:`normalize_metric_spec`) and that ``kwargs`` are only attached where
+    a metric function exists to consume them: HydroErr metrics, user-defined
+    callables, and standard flux-based constraints. Derived helpers and custom
+    entries are expressions over other metrics, so ``kwargs`` on them are a
+    configuration error.
+
+    Raises
+    ------
+    ValueError
+        If a metric specification is malformed or carries ``kwargs`` where
+        they cannot be forwarded to a metric function.
+    TypeError
+        If ``kwargs`` is not a mapping.
+    """
+    def _metric_key(metric_name):
+        return metric_name.__name__ if callable(metric_name) else metric_name
+
+    def _is_metric_func(metric_name):
+        return metric_name in hydro_err_ofs or callable(metric_name)
+
+    def _reject_derived_kwargs(metric_key, group, kind):
+        raise ValueError(
+            f"{kind} '{metric_key}' in group '{group}' is an expression over "
+            "other metrics and cannot carry 'kwargs' — there is no metric "
+            "function to forward them to."
+        )
+
+    objective_functions = eval_config.get('objective_functions') or {}
+    for group, group_metrics in objective_functions.items():
+        for flux_var, metrics in group_metrics.items():
+            for metric_name, spec in metrics.items():
+                metric_kwargs = normalize_metric_spec(spec)[1]
+                if 'helper' in group and not _is_metric_func(metric_name):
+                    if metric_kwargs:
+                        _reject_derived_kwargs(
+                            _metric_key(metric_name), group, 'Derived helper'
+                        )
+                elif 'custom' in group:
+                    if metric_kwargs:
+                        _reject_derived_kwargs(
+                            _metric_key(metric_name), group, 'Custom metric'
+                        )
+
+    constraints = eval_config.get('constraints') or {}
+    for group, group_metrics in constraints.items():
+        for flux_var, metrics in group_metrics.items():
+            for metric_name, metric_info in metrics.items():
+                metric_kwargs = metric_info.get('kwargs') if isinstance(metric_info, dict) else None
+                if metric_kwargs is None:
+                    metric_kwargs = {}
+                if not isinstance(metric_kwargs, dict):
+                    raise TypeError(
+                        f"Constraint '{_metric_key(metric_name)}' in group "
+                        f"'{group}', flux '{flux_var}' has 'kwargs' of type "
+                        f"{type(metric_kwargs).__name__}; expected a mapping."
+                    )
+                if not metric_kwargs:
+                    continue
+                if 'helper' in group and not _is_metric_func(metric_name):
+                    _reject_derived_kwargs(
+                        _metric_key(metric_name), group, 'Derived constraint helper'
+                    )
+                if 'custom' in group:
+                    _reject_derived_kwargs(
+                        _metric_key(metric_name), group, 'Custom constraint metric'
+                    )
+
+    return
 
 def rewrite_expr(expression, keys, flux_var, dict_name):
     """Replace metric names in ``expression`` with explicit dict references.
@@ -704,6 +835,11 @@ if __name__ == "__main__":
                     for name, func in _user_metric_funcs.items():
                         if name in metrics:
                             metrics[func] = metrics.pop(name)
+
+    # Validate per-metric specifications early: a malformed spec or `kwargs`
+    # attached to an expression-only metric must fail before any model run
+    # rather than being masked as an OSTRICH penalty value.
+    validate_metric_specs(eval_config)
 
     # empty the output directory before anything else
     _reset_dir(
@@ -890,6 +1026,9 @@ if __name__ == "__main__":
                     for metric_name in metrics:
                         metric_key = metric_name.__name__ if callable(metric_name) else metric_name
                         helper_ofs[flux_var][metric_key] = []
+                        expressions, metric_kwargs = normalize_metric_spec(
+                            metrics[metric_name]
+                        )
 
                         if metric_name in hydro_err_ofs or callable(metric_name):
                             # standard HydroErr metric or user-defined callable
@@ -897,7 +1036,7 @@ if __name__ == "__main__":
                                 sim_sub, obs_sub, flux_var, station_ids
                             )
                             station_metrics = compute_metric_dict(
-                                sim_series, obs_series, metric_name
+                                sim_series, obs_series, metric_name, metric_kwargs
                             )
                             # Warn about stations producing non-finite metrics
                             nan_stations = [
@@ -911,7 +1050,7 @@ if __name__ == "__main__":
                                     f"'{flux_var}' — excluding from aggregate "
                                     f"evaluation."
                                 )
-                            for expr in metrics[metric_name]:
+                            for expr in expressions:
                                 try:
                                     metric_value = ne.evaluate(expr, local_dict=station_metrics)
                                 except KeyError:
@@ -921,12 +1060,16 @@ if __name__ == "__main__":
                                     helper_ofs[flux_var][metric_key].append(metric_value)
                         else:
                             # derived helper: expression referencing previously computed helpers
+                            if metric_kwargs:
+                                raise ValueError(
+                                    f"Derived helper '{metric_key}' in group "
+                                    f"'{group}' cannot carry 'kwargs'."
+                                )
                             for k in helper_ofs[flux_var]:
                                 if isinstance(helper_ofs[flux_var][k], list):
                                     helper_ofs[flux_var][k] = np.array(helper_ofs[flux_var][k])
 
                             existing_keys = [k for k in helper_ofs[flux_var] if k != metric_key]
-                            expressions = normalize_expressions(metrics[metric_name])
                             for expr in expressions:
                                 rewritten = rewrite_expr(expr, existing_keys, flux_var, 'helper_ofs')
                                 metric_value = eval(rewritten)
@@ -943,7 +1086,15 @@ if __name__ == "__main__":
 
                         helper_keys = list(helper_ofs.get(flux_var, {}).keys())
                         custom_keys = [k for k in custom_ofs[flux_var] if k != metric_key]
-                        expressions = normalize_expressions(metrics[metric_name])
+                        expressions, metric_kwargs = normalize_metric_spec(
+                            metrics[metric_name]
+                        )
+                        if metric_kwargs:
+                            raise ValueError(
+                                f"Custom objective function '{metric_key}' in "
+                                f"group '{group}' cannot carry 'kwargs' — it is "
+                                "an expression over other metrics."
+                            )
 
                         for idx, expr in enumerate(expressions, start=1):
                             rewritten = rewrite_expr(expr, helper_keys, flux_var, 'helper_ofs')
@@ -960,11 +1111,12 @@ if __name__ == "__main__":
                         sim_sub, obs_sub, flux_var, station_ids
                     )
 
-                    for metric_name, expressions in metrics.items():
+                    for metric_name, spec in metrics.items():
                         metric_key = metric_name.__name__ if callable(metric_name) else metric_name
                         of_values[flux_var][metric_key] = []
+                        expressions, metric_kwargs = normalize_metric_spec(spec)
                         station_metrics = compute_metric_dict(
-                            sim_series, obs_series, metric_name
+                            sim_series, obs_series, metric_name, metric_kwargs
                         )
                         nan_stations = [
                             n for n, v in station_metrics.items()
@@ -977,7 +1129,6 @@ if __name__ == "__main__":
                                 f"'{flux_var}'."
                             )
 
-                        expressions = normalize_expressions(metrics[metric_name])
                         for idx, expr in enumerate(expressions, start=1):
                             try:
                                 metric_value = ne.evaluate(expr, local_dict=station_metrics)
@@ -1002,6 +1153,8 @@ if __name__ == "__main__":
                             metric_key = metric_name.__name__ if callable(metric_name) else metric_name
                             metric_info = metrics[metric_name]
                             constraint_helper_ofs[flux_var][metric_key] = []
+                            metric_kwargs = metric_info.get('kwargs') or {}
+                            expressions = normalize_expressions(metric_info.get('expressions'))
 
                             if metric_name in hydro_err_ofs or callable(metric_name):
                                 # standard HydroErr metric or user-defined callable
@@ -1009,7 +1162,7 @@ if __name__ == "__main__":
                                     sim_sub, obs_sub, flux_var, station_ids
                                 )
                                 station_metrics = compute_metric_dict(
-                                    sim_series, obs_series, metric_name
+                                    sim_series, obs_series, metric_name, metric_kwargs
                                 )
                                 nan_stations = [
                                     n for n, v in station_metrics.items()
@@ -1021,7 +1174,6 @@ if __name__ == "__main__":
                                         f"value for station(s) {nan_stations} on flux "
                                         f"'{flux_var}' — excluding from aggregate evaluation."
                                     )
-                                expressions = normalize_expressions(metric_info.get('expressions'))
                                 for expr in expressions:
                                     try:
                                         metric_value = ne.evaluate(expr, local_dict=station_metrics)
@@ -1031,12 +1183,16 @@ if __name__ == "__main__":
                                         constraint_helper_ofs[flux_var][metric_key].append(metric_value)
                             else:
                                 # derived helper: expression referencing previously computed constraint helpers
+                                if metric_kwargs:
+                                    raise ValueError(
+                                        f"Derived constraint helper '{metric_key}' in "
+                                        f"group '{group}' cannot carry 'kwargs'."
+                                    )
                                 for k in constraint_helper_ofs[flux_var]:
                                     if isinstance(constraint_helper_ofs[flux_var][k], list):
                                         constraint_helper_ofs[flux_var][k] = np.array(constraint_helper_ofs[flux_var][k])
 
                                 existing_keys = [k for k in constraint_helper_ofs[flux_var] if k != metric_key]
-                                expressions = normalize_expressions(metric_info.get('expressions'))
                                 for expr in expressions:
                                     rewritten = rewrite_expr(expr, existing_keys, flux_var, 'constraint_helper_ofs')
                                     metric_value = eval(rewritten)
@@ -1054,6 +1210,13 @@ if __name__ == "__main__":
 
                             helper_keys = list(constraint_helper_ofs.get(flux_var, {}).keys())
                             custom_keys = [k for k in constraint_custom_ofs[flux_var] if k != metric_key]
+                            metric_kwargs = metric_info.get('kwargs') or {}
+                            if metric_kwargs:
+                                raise ValueError(
+                                    f"Custom constraint metric '{metric_key}' in "
+                                    f"group '{group}' cannot carry 'kwargs' — it is "
+                                    "an expression over other metrics."
+                                )
                             expressions = normalize_expressions(metric_info.get('expressions'))
 
                             for idx, expr in enumerate(expressions, start=1):
@@ -1072,8 +1235,9 @@ if __name__ == "__main__":
 
                         for metric_name, metric_info in metrics.items():
                             metric_key = metric_name.__name__ if callable(metric_name) else metric_name
+                            metric_kwargs = metric_info.get('kwargs') or {}
                             station_metrics = compute_metric_dict(
-                                sim_series, obs_series, metric_name
+                                sim_series, obs_series, metric_name, metric_kwargs
                             )
                             nan_stations = [
                                 n for n, v in station_metrics.items()

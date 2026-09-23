@@ -89,20 +89,26 @@ The following entries provide necessary information for the package. In brief:
   with ``NaN`` and objective function metrics compute on the overlapping valid
   data. Use this when observations become available partway through a desired
   calibration window.
-- ``objective_functions``: mapping of observations to metrics. The outer keys
-  correspond to observation ``name``s (e.g., ``"QO"`` for discharge in MESH). Each value is
-  a dictionary mapping a metric name to a list of weighted observation terms.
-  Example structure:
+- ``objective_functions``: mapping of metric groups to observations and their
+  metrics. The outer keys are **groups** that must contain one of the keywords
+  ``flux``, ``state``, ``state_variable``, ``helper``, or ``custom``. For MESH
+  calibration, objective functions are normally defined under ``"flux"``
+  (station-based metrics); ``"state"``/``"state_variable"`` groups follow the
+  same pattern for model state variables. Each group maps an observation (or
+  state) ``name`` (e.g., ``"QO"`` for discharge in MESH) to a dictionary of
+  metrics. A metric value is either a single expression string, a list of
+  weighted observation terms, or a mapping that additionally carries per-metric
+  keyword arguments (see below). Example structure:
 
 
 .. code-block:: python
 
-    {"QO": {"kge_2012": ["-1 * alaska_72"]}}
+    {"flux": {"QO": {"kge_2012": ["-1 * alaska_72"]}}}
 
 
-In the objective function defined above, ``QO`` represents the observation type for
-discharge in MESH for which the desired metric(s) will be computed after successful
-iteration runs. 
+In the objective function defined above, ``flux`` is the metric group and ``QO``
+represents the observation type for discharge in MESH for which the desired
+metric(s) will be computed after successful iteration runs. 
 
 The metric ``kge_2012`` refers to the 2012 formulation of the Kling-Gupta
 Efficiency (KGE) metric. The keyword **MUST** match the supported metric names
@@ -122,15 +128,17 @@ by adding more strings to the list value. For example:
 
 .. code-block:: python
 
-    {"QO":
-        {
-            "kge_2012": [
-                "-1 * alaska_72",
-                "-1 * alaska_73"
-            ],
-            "nse": [
-                "-0.5 * alaska_72 + -0.5 * alaska_73"
-            ]
+    {
+        "flux": {
+            "QO": {
+                "kge_2012": [
+                    "-1 * alaska_72",
+                    "-1 * alaska_73"
+                ],
+                "nse": [
+                    "-0.5 * alaska_72 + -0.5 * alaska_73"
+                ]
+            }
         }
     }
 
@@ -139,6 +147,46 @@ In the example above, the KGE 2012 metric is computed for two observations
 as a weighted combination of both observations (with equal weights of ``0.5``).
 Therefore, 3 objective function values will be reported to the optimizer
 per iteration in this case.
+
+**Per-metric keyword arguments**
+
+Any metric value may instead be given as a mapping with an ``expressions`` key
+(the same string or list of expressions as above) plus an optional ``kwargs``
+mapping. Those keyword arguments are forwarded verbatim to the metric
+function — a HydroErr function or a user-defined callable — as
+``metric_func(simulated, observed, **kwargs)``. This is useful to match the
+valid-pair semantics of a verification pipeline, for example:
+
+.. code-block:: python
+
+    {
+        "flux": {
+            "QO": {
+                "kge_2012": {
+                    "expressions": [
+                        "-1 * alaska_72",
+                        "-1 * alaska_73"
+                    ],
+                    "kwargs": {"remove_zero": True, "remove_neg": True}
+                }
+            }
+        }
+    }
+
+The mapping form is equivalent to the string/list form when ``kwargs`` is
+omitted or empty, so existing configurations keep working unchanged. Unknown
+keys inside the mapping, and ``kwargs`` attached to metrics that have no
+function to receive them (derived helpers in a ``helper`` group and ``custom``
+expressions, which reference other metrics), raise a ``ValueError`` before the
+model is executed.
+
+- ``constraints`` *(optional)*: mapping of optimization constraints applied by
+  Ostrich's GCOP engine. Constraints reuse the group/metric syntax above and
+  additionally require ``lower``, ``upper``, and ``cost_factor`` keys. As for
+  objective functions, ``kwargs`` may be added alongside those keys, e.g.
+  ``{"lower": -25.0, "upper": 25.0, "cost_factor": 100,
+  "expressions": ["MY_OBS"], "kwargs": {"remove_zero": True}}``. See
+  :doc:`constraints` for the full reference and examples.
 
 .. warning::
 
@@ -471,6 +519,9 @@ Validation checklist
 - If ``parameter_initial_values`` is provided, every entry references a key
   that exists in ``parameter_bounds``, the value is numeric, and it lies
   inside the declared bounds.
+- If ``constraints`` are provided, each group name is recognized, every metric
+  defines ``lower``, ``upper``, ``cost_factor``, and ``expressions``, and any
+  ``kwargs`` are attached only to metrics that call a metric function.
 - Model executable is available on the system and callable by the workflow.
 
 Minimal instantiation pattern
@@ -495,7 +546,7 @@ Below is the minimal structure you should provide (values are illustrative):
            {"start": "1995-01-01 00:00:00", "end": "2005-12-31 23:00:00"},
        ],
        "objective_functions": {
-           "QO": {"kge_2012": ["-1 * MY_OBS"]},
+           "flux": {"QO": {"kge_2012": ["-1 * MY_OBS"]}},
        },
    }
 

@@ -98,10 +98,17 @@ BeginResponseVars
     {# Now iterate over the metrics and their cost function elements #}
       {% for metric in objective_functions.get(group).get(flux).keys() %}
         {% set metric_val = objective_functions.get(group).get(flux).get(metric) %}
-        {% if metric_val is string %}
+        {# A metric value may also be a mapping carrying per-metric kwargs;
+           unwrap its `expressions` before the string/list branches #}
+        {% if metric_val is mapping %}
+          {% set metric_expressions = metric_val.get('expressions') %}
+        {% else %}
+          {% set metric_expressions = metric_val %}
+        {% endif %}
+        {% if metric_expressions is string %}
   {{ group }}_{{ flux }}_{{ metric }}_1     ./etc/eval/{{ group }}_{{ flux }}_{{ metric }}_1.csv ;             OST_NULL     0      1     ','
         {% else %}
-          {% for of in metric_val %}
+          {% for of in metric_expressions %}
             {% set idx = loop.index %}
   {{ group }}_{{ flux }}_{{ metric }}_{{ idx }}     ./etc/eval/{{ group }}_{{ flux }}_{{ metric }}_{{ idx }}.csv ;             OST_NULL     0      1     ','
           {% endfor %}
@@ -138,10 +145,15 @@ BeginGCOP
     {# Now iterate over the metrics and their cost function elements #}
       {% for metric in objective_functions.get(group).get(flux).keys() %}
         {% set metric_val = objective_functions.get(group).get(flux).get(metric) %}
-        {% if metric_val is string %}
+        {% if metric_val is mapping %}
+          {% set metric_expressions = metric_val.get('expressions') %}
+        {% else %}
+          {% set metric_expressions = metric_val %}
+        {% endif %}
+        {% if metric_expressions is string %}
   CostFunction     {{ group }}_{{ flux }}_{{ metric }}_1
         {% else %}
-          {% for of in metric_val %}
+          {% for of in metric_expressions %}
             {% set idx = loop.index %}
   CostFunction     {{ group }}_{{ flux }}_{{ metric }}_{{ idx }}
           {% endfor %}
@@ -185,10 +197,15 @@ EndConstraints
     {# Now iterate over the metrics and their cost function elements #}
       {% for metric in objective_functions.get(group).get(flux).keys() %}
         {% set metric_val = objective_functions.get(group).get(flux).get(metric) %}
-        {% if metric_val is string %}
-  # {{ group }}_{{ flux }}_{{ metric }}_1: {{ metric_val }}
+        {% if metric_val is mapping %}
+          {% set metric_expressions = metric_val.get('expressions') %}
         {% else %}
-          {% for of in metric_val %}
+          {% set metric_expressions = metric_val %}
+        {% endif %}
+        {% if metric_expressions is string %}
+  # {{ group }}_{{ flux }}_{{ metric }}_1: {{ metric_expressions }}
+        {% else %}
+          {% for of in metric_expressions %}
             {% set idx = loop.index %}
   # {{ group }}_{{ flux }}_{{ metric }}_{{ idx }}: {{ of }}
           {% endfor %}
